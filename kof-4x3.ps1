@@ -904,7 +904,15 @@ function Get-BgY([string[]]$lines, $sections, [string]$id) {
 # Constant camera zoom; the zoom pivots on the floor line, so floor and background are translated down by zoffset/3
 # (only 1.x stages with a fixed floor need it). Camera bounds grow by localcoord/8 so the whole stage stays reachable.
 # Screen rows below the art on stages whose art ends closer to the floor; their floor goes down by that much.
-$floorDrop = @{ "kofxi-boss2" = 7 }
+$floorDrop = @{
+    "kofxi-boss2" = 7
+    "1999-airport" = 11; "1999-china_town" = 11; "kof2k-temple" = 11
+    "svc_boss" = 9; "1996-boss_team" = 9
+    "1995-korea_team" = 8; "2003-pyramids" = 7
+    "1994-japan" = 5
+    "1994-china" = 4; "1999-sewer" = 4; "1994-rugal" = 4
+    "kf2k3_skynoah" = 4; "kf2k3_kagurastage" = 4; "kf2k3_cave" = 4
+}
 
 function Convert-Stage([string]$text, [string]$name) {
     $split = Split-Lines $text
@@ -925,22 +933,29 @@ function Convert-Stage([string]$text, [string]$name) {
     }
     $shift = if ($localcoord -and -not $linked -and $null -ne $zoffset) { [math]::Round($zoffset / 3) } else { 0 }
     $bound = [math]::Round($(if ($localcoord) { $localcoord } else { 320 }) / 8)
-    # Ikemen: the stage gets the characters' localcoord width (1:1 pixels) and the floor goes where the arcade has it
-    # (y 204 of 224; 216 on 240 lines so the art, which ends 28 px below the floor, reaches the bottom edge; at this
-    # zoom Ikemen shows the floor 32 px above zoffset). Background
-    # layers move by the same amount. With zoffsetlink the floor is zoffset below the linked layer, so moving the
-    # layers moves the floor.
+    # With zoffsetlink the floor is zoffset below the linked layer, so the layer shift places the art and the
+    # zoffset change places the feet.
     $oldWidth = if ($localcoord) { $localcoord } else { 320 }
     $retarget = $ikemen -and $oldWidth -le 400
-    $floorZ = 248
-    # Measured: the floor moves 5 screen rows per 8 units of zoffset.
-    if ($floorDrop.ContainsKey($name)) { $floorZ += [math]::Ceiling($floorDrop[$name] * 1.6) }
+    # The art is shifted so it reaches the bottom of the 240 lines. The feet sit 2.5 screen px below that
+    # edge (half of the previous 5 px drop). Raising the floor with the art opens a gap. Ikemen draws the
+    # floor 32 px above zoffset, and the floor moves 5 screen rows per 8 units of zoffset, so 2.5 rows are
+    # 4 units. Only zoffset moves the feet.
+    $artZ = 248
+    if ($floorDrop.ContainsKey($name)) { $artZ += [math]::Ceiling($floorDrop[$name] * 1.6) }
+    $footZ = $artZ + 4
     # Retargeted stages show 320 units across instead of localcoord/zoom, so the bounds grow only by what the
     # widescreen view showed beyond that.
     if ($retarget) { $bound = [math]::Max(0, [math]::Floor($oldWidth / 2 - 160)) }
+    $footDelta = $null
     if ($retarget -and $null -ne $zoffset) {
-        if (-not $linked) { $shift = $floorZ - $zoffset }
-        else { $linkY = Get-BgY $lines $sections $linkId; if ($null -ne $linkY) { $shift = $floorZ - ($zoffset + $linkY) } }
+        if (-not $linked) {
+            $shift = $artZ - $zoffset
+            $footDelta = $footZ - $zoffset
+        } else {
+            $linkY = Get-BgY $lines $sections $linkId
+            if ($null -ne $linkY) { $shift = $artZ - ($zoffset + $linkY); $footDelta = $footZ - $artZ }
+        }
     }
 
     foreach ($s in $sections) {
@@ -954,7 +969,9 @@ function Convert-Stage([string]$text, [string]$name) {
             $nl = if ($split.seps[$s.from]) { $split.seps[$s.from] } else { "`r`n" }
             $lines[$s.from] += "${nl}zoomout = $zoom${nl}zoomin = $zoom"
         } elseif ($s.name -eq "[stageinfo]") {
-            $z = Find-Key $lines $s "zoffset"; if ($z -and $shift -and -not $linked) { $lines[$z.i] = Add-ToValues $lines[$z.i] @(0) $shift }
+            $z = Find-Key $lines $s "zoffset"
+            if ($z -and $null -ne $footDelta) { $lines[$z.i] = Add-ToValues $lines[$z.i] @(0) $footDelta }
+            elseif ($z -and $shift -and -not $linked) { $lines[$z.i] = Add-ToValues $lines[$z.i] @(0) $shift }
             if ($retarget -and $s -eq $infos[0]) {
                 $lc = Find-Key $lines $s "localcoord"
                 $height = if ($lc) { [int](($lc.value -split ',')[1].Trim()) } else { 240 }
@@ -965,10 +982,13 @@ function Convert-Stage([string]$text, [string]$name) {
         } elseif ($s.name -match '^\[\s*bg(?!\s*def|\s*ctrl)') {
             $zd = Find-Key $lines $s "zoomdelta"; if ($zd) { $lines[$zd.i] = ($lines[$zd.i] -replace '=\s*[-\d.]+', '= 1') }
             $link = Find-Key $lines $s "positionlink"
-            if (-not $shift -or ($link -and $link.value -match '^[-+]?0*[1-9]')) { continue }
-            $st = Find-Key $lines $s "start"; if ($st) { $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $shift }
+            $bgShift = $shift
+            # Brazil's canopy sits a few pixels under the top of the screen. Lift only the picture.
+            if ($retarget -and $name -eq "1994-brazil") { $bgShift -= 8 }
+            if (-not $bgShift -or ($link -and $link.value -match '^[-+]?0*[1-9]')) { continue }
+            $st = Find-Key $lines $s "start"; if ($st) { $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $bgShift }
             foreach ($key in "window", "maskwindow") {
-                $w = Find-Key $lines $s $key; if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(1, 3) $shift }
+                $w = Find-Key $lines $s $key; if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(1, 3) $bgShift }
             }
         }
     }
