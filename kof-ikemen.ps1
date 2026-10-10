@@ -46,9 +46,14 @@ function Get-Release([string]$os) {
 }
 
 function Copy-Tree([string]$from, [string]$to) {
-    robocopy $from $to /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
-    if ($LASTEXITCODE -ge 8) { throw "Falha ao copiar '$from' para '$to' (robocopy $LASTEXITCODE)." }
-    $global:LASTEXITCODE = 0
+    if (Get-Command robocopy -ErrorAction SilentlyContinue) {
+        robocopy $from $to /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "Falha ao copiar '$from' para '$to' (robocopy $LASTEXITCODE)." }
+        $global:LASTEXITCODE = 0
+        return
+    }
+    New-Item -ItemType Directory -Force -Path $to | Out-Null
+    Copy-Item -LiteralPath (Join-Path $from "*") -Destination $to -Recurse -Force
 }
 
 $base = if ($Platform -eq "linux") { "linux" } else { "windows" }

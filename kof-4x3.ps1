@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $latin1 = [Text.Encoding]::GetEncoding(28591)
 
 $patchDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = if ($GameDir) { (Resolve-Path -LiteralPath $GameDir).Path.TrimEnd('\') } else { Split-Path -Parent $patchDir }
+$root = if ($GameDir) { (Resolve-Path -LiteralPath $GameDir).Path.TrimEnd('\', '/') } else { Split-Path -Parent $patchDir }
 $ikemen = (Test-Path -LiteralPath (Join-Path $root "Ikemen_GO.exe")) -or (Test-Path -LiteralPath (Join-Path $root "Ikemen_GO_Linux"))
 if (-not $ikemen -and -not (Test-Path -LiteralPath (Join-Path $root "Final Attack.exe"))) {
     throw "Nao encontrei 'Final Attack.exe'. Coloque a pasta 'Patch 4x3' dentro da pasta do jogo."
@@ -39,7 +39,7 @@ $hudBottomShift = if ($ikemen) { "($screenHeight - $screenWidth*9/16 - 10)" } el
 
 function Read-Text([string]$path) { [IO.File]::ReadAllText($path, $latin1) }
 function Write-Text([string]$path, [string]$text) { [IO.File]::WriteAllText($path, $text, $latin1) }
-function Rel([string]$path) { $path.Substring($root.Length + 1) }
+function Rel([string]$path) { ($path.Substring($root.Length + 1) -replace '[\\/]', '\') }
 
 function Assert-GameClosed {
     $exe = [IO.Path]::GetFullPath((Join-Path $root $(if ($ikemen) { "Ikemen_GO.exe" } else { "Final Attack.exe" })))
