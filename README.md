@@ -128,16 +128,17 @@ Nesse caso o backup fica em `backup-widescreen/` dentro da pasta Ikemen.
 
 ### Diferenças em relação ao MUGEN
 
-O zoom dos cenários e o reposicionamento do HUD na base da tela são os mesmos. No Ikemen as telas e o HUD
-continuam no layout 16:9 centralizado (sem a grade compacta nem o HUD ampliado). O que muda:
+Telas, grade de seleção, HUD e storyboards recebem as mesmas conversões do MUGEN (960x720). Além disso, o Ikemen
+é ajustado para um CRT em 320x240 nativo com **pixel 1:1** (cada pixel do sprite ocupa exatamente um pixel da tela,
+como no arcade):
 
 | Arquivo | Alteração no Ikemen |
 |---|---|
-| `save/config.ini` | `GameWidth/GameHeight` = renderização (960x720), `WindowWidth/WindowHeight` = saída (320x240), `FightAspect` = resolução (4:3). Na restauração só essas chaves voltam |
-| `data/common1.cns`, `chars/*` | Explods ancorados na tela usam `screenwidth/screenheight`, gatilhos do Ikemen que dão o tamanho da tela sem zoom (no Ikemen `gamewidth/gameheight` não seguem a regra do MUGEN) |
-| `data/system.def` | `localcoord = 1280,960`, posições absolutas descem 120 unidades (centralizando como no MUGEN) e a estrada do título encosta na base |
-| `data/fight.def` | Recebe `[Info] localcoord = 1280,720`, que antes vinha implícito do `system.def`; anúncios centralizados na tela 4:3 |
-| `data/story.def`, `data/ending.def` | Storyboards 1080x720 eram vistos pela moldura 16:9 (o texto começa fora da área 1080). Viram `localcoord = 1280,960` com as cenas deslocadas, mostrando a mesma área do widescreen |
+| `save/config.ini` | `GameWidth/GameHeight` = `WindowWidth/WindowHeight` = resolução escolhida (renderização direta, sprites nítidos), `FightAspect` = resolução (4:3). Na restauração só essas chaves voltam |
+| `stages/*.def` | Zoom 1.14375 (personagens 1:1 em 320 de largura); cenários de até 400 de largura recebem `localcoord = 366` (arte 1:1), chão em `zoffset = 248` (pé em y≈216, como no arcade) e limites de câmera proporcionais. Cenários com menos arte abaixo do chão têm o chão um pouco mais baixo, para a arte chegar à base da tela |
+| `data/common1.cns`, `chars/*` | Explods ancorados na tela usam `screenwidth/screenheight`, gatilhos do Ikemen que dão o tamanho da tela sem zoom. Medidor de power, pontuação, modo MAX, LEVEL e nomes do VS recebem escala 8/7 (1:1 em 320x240); topo do HUD 6 px mais baixo e HUD de baixo 10 px acima da borda, fora do overscan do CRT |
+| `data/system.def`, `data/select.def` | Grade de seleção com 2 px entre os blocos de times (deslocamento por coluna, `cell.N-*.offset`), margem nas laterais e no topo |
+| `data/*.def` (storyboards) | Sem `localcoord` recebem `320,240`; os de 370x280 mostram o centro 320x240 em 1:1 |
 | `data/common1.cns.zss` | Removido da cópia: o Ikemen daria preferência a ele, e o HUD do jogo está no `common1.cns` |
 
 ## Observações
@@ -160,3 +161,6 @@ continuam no layout 16:9 centralizado (sem a grade compacta nem o HUD ampliado).
   HUD de luta na proporção do original com barras de vida mais curtas, fundo do MODE SELECT até a base, texto
   LEVEL no início da luta, tela de logo e créditos centralizadas, texto da história e do final sem cortes,
   barras de vida mais longas ocupando a sobra ao lado do rosto, cenários e efeitos na proporção do original.
+- **1.3** — Ikemen GO em 320x240 nativo com pixel 1:1 para CRT: cenários, HUD e storyboards sem pixel perdido ou
+  duplicado, chão na altura do arcade, HUD afastado das bordas, seleção com margem e espaço entre os times; menus,
+  HUD e storyboards com as mesmas conversões do MUGEN.
