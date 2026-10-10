@@ -252,6 +252,10 @@ function Convert-FightMugen([string]$text) {
             $player = if ($Matches[2]) { [int]$Matches[2] } elseif ($Matches[4]) { [int]$Matches[4] } elseif ($Matches[5]) { [int]$Matches[5] } else { 0 }
             $teammate = [bool]$Matches[3]
             $left = $player % 2 -eq 1
+            if ($topHudShift -and $code -notmatch '^(?i)p\d\.range\.x' -and
+                ($name -match '(lifebar|face|name)\]$' -or $name -eq "[time]")) {
+                $lines[$i] = Add-ToValues $lines[$i] @(1) (3 * $topHudShift)
+            }
             if ($code -match '^(?i)p\d\.range\.x') {
                 $lines[$i] = Add-ToValues $lines[$i] @(1) $(if ($left) { $lifeCut } else { -$lifeCut })
             } elseif ($name -match 'lifebar\]$' -or $name -in "[time]", "[round]", "[winicon]") {
@@ -694,6 +698,50 @@ function Add-ZoomRefresh([string[]]$lines, [string]$nl) {
     $n
 }
 
+# Ikemen at 320x240 draws screen-anchored FightFx sprites at 7/8 (2.625 / 3), which drops pixel columns of the small
+# pixel-font sprites. The power gauge (the Statedef that sets fvar(39), plus the MAX mode pieces at y 188), the
+# difficulty LEVEL and the characters' VS names (anim 7997, 4x pixel art at .25) get 8/7 on top of their scale, i.e. 1:1.
+$hudScale = "1.142857"
+# Ikemen at 320x240 shows the top edge on the CRT: the top HUD (lifebars, faces, names, time, score) moves down
+# by this many screen pixels.
+$topHudShift = if ($ikemen) { 6 } else { 0 }
+# The middle of the 8 px LEVEL sits on the gauges' bottom edge.
+$levelLift = 11.15
+function Add-HudScale([string[]]$lines, [string]$nl) {
+    $n = 0
+    $gauges = @{}
+    $statedef = -1
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -match '^\s*\[\s*(?i)statedef') { $statedef = $i }
+        elseif ($lines[$i] -match 'fvar\(39\):=\s*197\.5') { $gauges[$statedef] = $true }
+    }
+    $inGauge = $false
+    foreach ($b in Get-Blocks $lines) {
+        if ($lines[$b.from] -match '^\s*\[\s*(?i)statedef') { $inGauge = $gauges.ContainsKey($b.from); continue }
+        if ($b.type -notin @("explod", "modifyexplod")) { continue }
+        $pos = if ($b.posIdx -ge 0) { ($lines[$b.posIdx] -replace ';.*$', '') } else { "" }
+        $max = $b.type -eq "explod" -and $pos -match '188\s*\+\s*\(screenheight'
+        $level = $b.type -eq "explod" -and $pos -match '\(screenwidth\*\.5\),\(screenheight\)'
+        $vsNames = $b.type -eq "explod" -and
+            @($lines[($b.from + 1)..($b.to - 1)] | Where-Object { $_ -match '^\s*(?i)anim\s*=\s*7997\b' }).Count -gt 0
+        if (-not ($inGauge -or $max -or $level -or $vsNames)) { continue }
+        $found = $false
+        for ($i = $b.from + 1; $i -lt $b.to; $i++) {
+            $code = ($lines[$i] -replace ';.*$', '')
+            if ($code -notmatch '^(?i)\s*scale\s*=(.*)$') { continue }
+            $parts = Split-Pos $Matches[1]
+            if (-not $parts) { continue }
+            $lines[$i] = "scale = ($($parts[0].Trim()))*$hudScale,($($parts[1].Trim()))*$hudScale"
+            $found = $true; $n++
+        }
+        if (-not $found -and $b.type -eq "explod" -and $b.posIdx -ge 0) {
+            $lines[$b.posIdx] += "${nl}scale = $hudScale,$hudScale"
+            $n++
+        }
+    }
+    $n
+}
+
 # Screen-anchored HUD pieces near the bottom of the 16:9 frame (y 150..230) are moved to the bottom of the 4:3 screen.
 function Convert-Common([string]$text) {
     $split = Split-Lines $text
@@ -719,6 +767,10 @@ function Convert-Common([string]$text) {
     }
     foreach ($b in Get-Blocks $lines) { & $flush $b }
     $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    if ($ikemen) {
+        $scaled = Add-HudScale $lines $nl
+        if ($scaled -lt 20) { throw "data/common1.cns: explods do medidor de power nao encontrados ($scaled)." }
+    }
     $refreshed = Add-ZoomRefresh $lines $nl
     if ($refreshed -lt 2) { throw "data/common1.cns: explods de inicio de luta (LEVEL) nao encontrados." }
     $text = Join-Lines $split
@@ -729,6 +781,25 @@ function Convert-Common([string]$text) {
         $count = ([regex]::Matches($text, [regex]::Escape($score))).Count
         if ($count -lt 10) { throw "data/common1.cns: posicao da pontuacao nao encontrada." }
         $text = $text.Replace($score, 'ifelse( teamside=1 , 65 , 261.5 )')
+    }
+
+    if ($topHudShift) {
+        $scoreY = [regex]'(ifelse\( teamside=1 , 46\.5 , 280\.0 \)[^,\r\n]*, )-2\.5'
+        if ($scoreY.Matches($text).Count -lt 10) { throw "data/common1.cns: altura da pontuacao nao encontrada." }
+        $dy = [math]::Round($topHudShift * $charLocalcoord / 320, 2).ToString($inv)
+        $text = $scoreY.Replace($text, "`${1}(-2.5 + $dy)")
+    }
+
+    if ($ikemen) {
+        # The VS names, 1:1 and so taller, move up 4 px to clear the LEVEL below them.
+        $vsY = 'pos = screenwidth/2,180 + '
+        if (([regex]::Matches($text, [regex]::Escape($vsY))).Count -ne 1) { throw "data/common1.cns: posicao dos nomes do VS nao encontrada." }
+        $text = $text.Replace($vsY, 'pos = screenwidth/2,175.43 + ')
+
+        # The difficulty LEVEL sits on the screen bottom itself; same margin as the rest of the bottom HUD.
+        $level = 'pos = (screenwidth*.5),(screenheight)'
+        if (([regex]::Matches($text, [regex]::Escape($level))).Count -ne 2) { throw "data/common1.cns: posicao do LEVEL nao encontrada." }
+        $text = $text.Replace($level, "pos = (screenwidth*.5),(screenheight - $levelLift)")
     }
 
     $powerY = 'fvar(39):= 197.5'
