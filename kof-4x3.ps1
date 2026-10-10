@@ -261,12 +261,38 @@ function Convert-FightMugen([string]$text) {
             } elseif ($name -match 'lifebar\]$' -or $name -in "[time]", "[round]", "[winicon]") {
                 $lines[$i] = Add-ToValues $lines[$i] @(0) (-$motifCrop)
             } elseif ($name -match '(face|name)\]$' -or $name -eq "[combo]") {
+                if ($ikemen -and $name -eq "[combo]" -and $code -match '^(?i)team\d\.pos\s*=') {
+                    $lines[$i] = Add-ToValues $lines[$i] @(1) 30
+                }
                 $dx = if ($name -eq "[combo]") { 0 } else { $face }
                 if ($name -in "[simul face]", "[turns face]" -and -not $teammate) { $dx += $teamFaceShift }
                 if ($name -eq "[face]") { $dx += 3 * $frameCut[1] }
                 $lines[$i] = Add-ToValues $lines[$i] @(0) $(if ($left) { $dx } else { -2 * $motifCrop - $dx })
             } else { continue }
             $n++
+        }
+    }
+    if ($ikemen) {
+        # Combo digits are 24x37. Scale 2.4 is a step above 2 (which crushed the bitmap) and below the
+        # full 1:1 scale 3; the counter also sits 10 screen px lower. Round-win icons stay at scale 3.
+        # ROUND and FIGHT were authored for the 1280-wide motif, so on 960 they draw a third larger.
+        # FIGHT goes to 2 (was 3.5) and each ROUND n to 3.5 (was 5).
+        foreach ($s in Get-StageSections $lines) {
+            $sec = ($s.name -replace '\s+', ' ')
+            for ($i = $s.from + 1; $i -lt $s.to; $i++) {
+                $code = ($lines[$i] -replace ';.*$', '')
+                if ($sec -eq "[combo]" -and $code -match '1\.6\s*,\s*1\.6') {
+                    $lines[$i] = $lines[$i] -replace '1\.6\s*,\s*1\.6', '2.4,2.4'
+                } elseif ($sec -eq "[winicon]" -and $code -match '(?i)scale\s*=\s*2\s*,\s*2') {
+                    $lines[$i] = $lines[$i] -replace '2\s*,\s*2', '3,3'
+                } elseif ($sec -eq "[winicon]" -and $code -match '(?i)counter\.scale\s*=\s*1\s*,\s*1') {
+                    $lines[$i] = $lines[$i] -replace '1\s*,\s*1', '3,3'
+                } elseif ($sec -eq "[round]" -and $code -match '(?i)fight\.scale\s*=') {
+                    $lines[$i] = $lines[$i] -replace '3\.5\s*,\s*3\.5', '2,2'
+                } elseif ($sec -eq "[round]" -and $code -match '(?i)round\d\.scale\s*=') {
+                    $lines[$i] = $lines[$i] -replace '5\s*,\s*5', '3.5,3.5'
+                }
+            }
         }
     }
     if ($n -lt 40) { throw "data/fight.def: poucos elementos de HUD encontrados ($n); arquivo diferente do esperado." }
