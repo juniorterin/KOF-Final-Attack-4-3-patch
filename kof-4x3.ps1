@@ -22,14 +22,20 @@ $stateFile = Join-Path $backupDir "estado.txt"
 
 # MUGEN 1.1 always lays out the fight as if the screen were 16:9. A constant camera zoom of (16/9)/(4/3)
 # turns that into a true 4:3 crop: stage and characters keep their proportions and their vertical framing.
-# Ikemen GO (FightAspect = resolution) frames the fight the same way, so the same zoom applies.
-$zoom = "1.333333"
+# Ikemen GO (FightAspect = resolution) lays the fight out at 4:3 and can show more height than the 16:9 frame, so it
+# uses the zoom that draws the characters (localcoord 366) one sprite pixel per screen pixel on a 320-wide screen:
+# the arcade pixel grid on a CRT.
+$zoom = if ($ikemen) { "1.14375" } else { "1.333333" }
+# Ikemen draws a stage pixel at zoom*320/localcoord screen pixels; the arcade stage art matches the characters 1:1
+# when the stage uses the characters' localcoord width.
+$charLocalcoord = 366
 # Under zoom, gamewidth/gameheight shrink by the zoom factor while screen-anchored explods are not zoomed.
 # Ikemen computes them differently but has screenwidth/screenheight, the unzoomed screen size.
 $screenWidth = if ($ikemen) { "screenwidth" } else { "(gamewidth*4/3)" }
 $screenHeight = if ($ikemen) { "screenheight" } else { "(gameheight*4/3)" }
 # Extra height of a 4:3 screen, measured in the units of screen-anchored explods (16:9 frame = width*9/16).
-$hudBottomShift = "($screenHeight - $screenWidth*9/16)"
+# Ikemen at 1:1 has the HUD in screen pixels; the arcade keeps it ~10 px above the bottom, clear of CRT overscan.
+$hudBottomShift = if ($ikemen) { "($screenHeight - $screenWidth*9/16 - 10)" } else { "($screenHeight - $screenWidth*9/16)" }
 
 function Read-Text([string]$path) { [IO.File]::ReadAllText($path, $latin1) }
 function Write-Text([string]$path, [string]$text) { [IO.File]::WriteAllText($path, $text, $latin1) }
@@ -296,7 +302,7 @@ function Convert-Motif([string]$text, [int]$shift) {
         $isBg = $name -match '^\[\s*\w*bg\s' -and $name -notmatch 'bgdef'
         if ($isBg) {
             $link = Find-Key $lines $s "positionlink"
-            if ($link -and $link.value -match '^1') { continue }
+            if ($link -and $link.value -match '^[-+]?0*[1-9]') { continue }
             $keys = @("start")
             # The title road (sprite 9011,4, bottom 2 px below its axis) ended 26 px above the 16:9 bottom;
             # it now reaches the bottom of the 4:3 screen.
@@ -784,9 +790,28 @@ function Find-Key([string[]]$lines, $section, [string]$key) {
     $null
 }
 
+# Starting y of the BG element with the given id; a nonzero positionlink places an element relative to the one before it.
+function Get-BgY([string[]]$lines, $sections, [string]$id) {
+    $prev = 0.0
+    foreach ($s in $sections | Where-Object { $_.name -match '^\[\s*bg(?!\s*def|\s*ctrl)' }) {
+        $st = Find-Key $lines $s "start"
+        $y = 0.0
+        if ($st) { $parts = $st.value -split ','; if ($parts.Length -gt 1) { [void][double]::TryParse($parts[1].Trim(), [Globalization.NumberStyles]::Float, $inv, [ref]$y) } }
+        $link = Find-Key $lines $s "positionlink"
+        if ($link -and $link.value -match '^[-+]?0*[1-9]') { $y += $prev }
+        $bid = Find-Key $lines $s "id"
+        if ($bid -and $bid.value.Trim() -eq $id) { return $y }
+        $prev = $y
+    }
+    $null
+}
+
 # Constant camera zoom; the zoom pivots on the floor line, so floor and background are translated down by zoffset/3
 # (only 1.x stages with a fixed floor need it). Camera bounds grow by localcoord/8 so the whole stage stays reachable.
-function Convert-Stage([string]$text) {
+# Screen rows below the art on stages whose art ends closer to the floor; their floor goes down by that much.
+$floorDrop = @{ "kofxi-boss2" = 7 }
+
+function Convert-Stage([string]$text, [string]$name) {
     $split = Split-Lines $text
     $lines = $split.lines
     $sections = @(Get-StageSections $lines)
@@ -794,16 +819,34 @@ function Convert-Stage([string]$text) {
     $cameras = @($sections | Where-Object { $_.name -eq "[camera]" })
     if (-not $infos.Count -or -not $cameras.Count) { return $null }
 
-    $localcoord = $null; $zoffset = $null; $linked = $false
+    $localcoord = $null; $zoffset = $null; $linked = $false; $linkId = $null
     foreach ($s in $infos) {
         $lc = Find-Key $lines $s "localcoord"
         if ($lc -and $null -eq $localcoord) { $localcoord = [int](($lc.value -split ',')[0]) }
         $z = Find-Key $lines $s "zoffset"
         if ($z -and $null -eq $zoffset) { $zoffset = [double]::Parse($z.value, $inv) }
-        if (Find-Key $lines $s "zoffsetlink") { $linked = $true }
+        $zl = Find-Key $lines $s "zoffsetlink"
+        if ($zl) { $linked = $true; $linkId = $zl.value.Trim() }
     }
     $shift = if ($localcoord -and -not $linked -and $null -ne $zoffset) { [math]::Round($zoffset / 3) } else { 0 }
     $bound = [math]::Round($(if ($localcoord) { $localcoord } else { 320 }) / 8)
+    # Ikemen: the stage gets the characters' localcoord width (1:1 pixels) and the floor goes where the arcade has it
+    # (y 204 of 224; 216 on 240 lines so the art, which ends 28 px below the floor, reaches the bottom edge; at this
+    # zoom Ikemen shows the floor 32 px above zoffset). Background
+    # layers move by the same amount. With zoffsetlink the floor is zoffset below the linked layer, so moving the
+    # layers moves the floor.
+    $oldWidth = if ($localcoord) { $localcoord } else { 320 }
+    $retarget = $ikemen -and $oldWidth -le 400
+    $floorZ = 248
+    # Measured: the floor moves 5 screen rows per 8 units of zoffset.
+    if ($floorDrop.ContainsKey($name)) { $floorZ += [math]::Ceiling($floorDrop[$name] * 1.6) }
+    # Retargeted stages show 320 units across instead of localcoord/zoom, so the bounds grow only by what the
+    # widescreen view showed beyond that.
+    if ($retarget) { $bound = [math]::Max(0, [math]::Floor($oldWidth / 2 - 160)) }
+    if ($retarget -and $null -ne $zoffset) {
+        if (-not $linked) { $shift = $floorZ - $zoffset }
+        else { $linkY = Get-BgY $lines $sections $linkId; if ($null -ne $linkY) { $shift = $floorZ - ($zoffset + $linkY) } }
+    }
 
     foreach ($s in $sections) {
         if ($s.name -eq "[camera]") {
@@ -816,11 +859,18 @@ function Convert-Stage([string]$text) {
             $nl = if ($split.seps[$s.from]) { $split.seps[$s.from] } else { "`r`n" }
             $lines[$s.from] += "${nl}zoomout = $zoom${nl}zoomin = $zoom"
         } elseif ($s.name -eq "[stageinfo]") {
-            $z = Find-Key $lines $s "zoffset"; if ($z -and $shift) { $lines[$z.i] = Add-ToValues $lines[$z.i] @(0) $shift }
+            $z = Find-Key $lines $s "zoffset"; if ($z -and $shift -and -not $linked) { $lines[$z.i] = Add-ToValues $lines[$z.i] @(0) $shift }
+            if ($retarget -and $s -eq $infos[0]) {
+                $lc = Find-Key $lines $s "localcoord"
+                $height = if ($lc) { [int](($lc.value -split ',')[1].Trim()) } else { 240 }
+                $new = "localcoord = $charLocalcoord, $([math]::Round($height * $charLocalcoord / $oldWidth))"
+                if ($lc) { $lines[$lc.i] = $new + " ;4x3 " + $lines[$lc.i].Trim() }
+                else { $nl = if ($split.seps[$s.from]) { $split.seps[$s.from] } else { "`r`n" }; $lines[$s.from] += "$nl$new" }
+            }
         } elseif ($s.name -match '^\[\s*bg(?!\s*def|\s*ctrl)') {
             $zd = Find-Key $lines $s "zoomdelta"; if ($zd) { $lines[$zd.i] = ($lines[$zd.i] -replace '=\s*[-\d.]+', '= 1') }
             $link = Find-Key $lines $s "positionlink"
-            if (-not $shift -or ($link -and $link.value -match '^1')) { continue }
+            if (-not $shift -or ($link -and $link.value -match '^[-+]?0*[1-9]')) { continue }
             $st = Find-Key $lines $s "start"; if ($st) { $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $shift }
             foreach ($key in "window", "maskwindow") {
                 $w = Find-Key $lines $s $key; if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(1, 3) $shift }
