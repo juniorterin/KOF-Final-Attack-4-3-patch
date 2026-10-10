@@ -38,9 +38,12 @@ O patch não altera o modo janela/tela cheia. No CRT, use `Alt+Enter` no jogo ou
 | Arquivo | Alteração |
 |---|---|
 | `data/mugen.cfg` | `GameWidth/GameHeight` = resolução de renderização; `[Video] Width/Height` = resolução de saída |
-| `data/system.def` | Telas em `localcoord = 1280,960`, ocupando a tela 4:3 inteira; posições absolutas descem 120 unidades e a estrada do título encosta na base |
-| `data/fight.def` | Anúncios (Round, Fight, KO) centralizados na tela 4:3 |
-| `data/common1.cns` | HUD de luta (barras de power, estoques, ícones, banner VS, texto LEVEL) reposicionado para a tela 4:3; fundo do MODE SELECT estendido até a base |
+| `data/system.def` | Telas em `localcoord = 960,720` (tela 4:3 inteira, na proporção do original); grade de seleção com espaços menores entre blocos, retrato maior, estrada do título até a base |
+| `data/select.def` | Grade em colunas de 8 unidades (cada personagem ocupa 5); o espaço entre blocos fica com uma coluna |
+| `data/fight.def` | HUD de luta em 960x720: tempo, ícones e anúncios centralizados, P2 alinhado à direita, barras de vida mais curtas |
+| `data/fight.sff` | Fundo das barras de vida (sprites 10,0 e 10,1) com 4 segmentos listrados a menos |
+| `data/common1.cns` | HUD de luta (pontuação, barras de power, estoques, ícones, banner VS, texto LEVEL) reposicionado para a tela 4:3; fundo do MODE SELECT estendido até a base |
+| `data/logo.def`, `data/credits.def` | Textos centralizados no 4:3 |
 | `stages/*.def` | Zoom fixo de câmera 4:3 e ajuste de enquadramento |
 | `chars/*` (14 arquivos) | Efeitos de tela dos supers centralizados corretamente sob o zoom |
 
@@ -68,8 +71,14 @@ transforma a imagem em um **recorte 4:3 fiel** do widescreen:
   resoluções de saída abaixo de 960 px são renderizadas em 960x720 e reduzidas pelo próprio engine
   (`[Video] Width/Height`), o que também deixa a imagem mais limpa em 320x240.
 - **Menus:** com um motif 16:9 o MUGEN 1.1 centraliza as telas e recorta os fundos na faixa 16:9, deixando
-  barras pretas. O `system.def` passa a declarar `localcoord = 1280,960`: os fundos vão até a borda da tela e o
-  layout original fica centralizado (posições absolutas +120). A estrada animada do título é ancorada na base.
+  barras pretas. O `system.def` passa a declarar `localcoord = 960,720`: mesma altura do original, então as
+  telas preenchem o 4:3 com o layout vertical original, 33% maiores, perdendo 160 unidades de cada lado. Para a
+  grade de personagens caber, os espaços entre os blocos caem de 40 para 8 unidades: a grade passa a ter colunas
+  de 8 (cada personagem seguido de 4 vazias, que o cursor pula) e as artes da grade são desenhadas por bloco
+  (`window`).
+- **HUD de luta:** o `fight.def` usa o `localcoord` do `system.def`, então o HUD volta à proporção do original.
+  Para caber em 960 de largura, as barras de vida ficam 168 unidades mais curtas: o fundo delas no `fight.sff`
+  perde 56 px da faixa listrada (4 períodos do padrão, sem emenda) e o `range` das barras encurta junto.
 
 ## Versão Ikemen GO
 
@@ -112,13 +121,15 @@ Nesse caso o backup fica em `backup-widescreen/` dentro da pasta Ikemen.
 
 ### Diferenças em relação ao MUGEN
 
-O zoom dos cenários e o reposicionamento do HUD são os mesmos. O que muda:
+O zoom dos cenários e o reposicionamento do HUD na base da tela são os mesmos. No Ikemen as telas e o HUD
+continuam no layout 16:9 centralizado (sem a grade compacta nem o HUD ampliado). O que muda:
 
 | Arquivo | Alteração no Ikemen |
 |---|---|
 | `save/config.ini` | `GameWidth/GameHeight` = renderização (960x720), `WindowWidth/WindowHeight` = saída (320x240), `FightAspect` = resolução (4:3). Na restauração só essas chaves voltam |
 | `data/common1.cns`, `chars/*` | Explods ancorados na tela usam `screenwidth/screenheight`, gatilhos do Ikemen que dão o tamanho da tela sem zoom (no Ikemen `gamewidth/gameheight` não seguem a regra do MUGEN) |
-| `data/fight.def` | Recebe `[Info] localcoord = 1280,720`, que antes vinha implícito do `system.def` |
+| `data/system.def` | `localcoord = 1280,960`, posições absolutas descem 120 unidades (centralizando como no MUGEN) e a estrada do título encosta na base |
+| `data/fight.def` | Recebe `[Info] localcoord = 1280,720`, que antes vinha implícito do `system.def`; anúncios centralizados na tela 4:3 |
 | `data/story.def`, `data/ending.def` | Storyboards 1080x720 eram vistos pela moldura 16:9 (o texto começa fora da área 1080). Viram `localcoord = 1280,960` com as cenas deslocadas, mostrando a mesma área do widescreen |
 | `data/common1.cns.zss` | Removido da cópia: o Ikemen daria preferência a ele, e o HUD do jogo está no `common1.cns` |
 
@@ -138,3 +149,6 @@ O zoom dos cenários e o reposicionamento do HUD são os mesmos. O que muda:
   saída padrão 320x240 para CRT com renderização interna em 960x720, backup e restauração.
 - **1.1** — Conversão para Ikemen GO v1.0.0 (`kof-ikemen.ps1`) em 4:3, Windows e Linux; `kof-4x3.ps1` aceita
   `-GameDir` e reconhece pastas do Ikemen.
+- **1.2** — MUGEN: telas em 960x720 preenchendo o 4:3 (título, seleção com grade compacta e retrato maior),
+  HUD de luta na proporção do original com barras de vida mais curtas, fundo do MODE SELECT até a base, texto
+  LEVEL no início da luta, tela de logo e créditos centralizadas.

@@ -117,11 +117,135 @@ function Convert-Fight([string]$text, [int]$shift) {
     $text
 }
 
-# ---------------------------------------------------------------- system.def
-# MUGEN 1.1 fits a 16:9 motif to the width of a 4:3 screen, centres it and clips its backgrounds to the 16:9
-# band; Ikemen crops its sides instead. A 4:3 localcoord of the same width makes both fit the width and draw on
-# the whole screen; absolute positions then move down by $shift to stay centred (positions relative to another
-# element are left alone).
+# ---------------------------------------------------------------- fight.def, fight.sff (MUGEN)
+# fight.def is laid out in the motif localcoord, now 960 wide: the HUD keeps its original size relative to the
+# screen height. Centre elements move by -160 and P2 elements by -320; the lifebars lose $lifeCut units so
+# everything fits. Their background sprites (face frame + striped bar + half of the timer box, 3x scale) lose
+# 56 px of stripes (4 periods of the pattern), so the face frames move $lifeCut - 160 towards the centre.
+$lifeCut = 168
+$lifeSprites = @(@(10, 0), @(10, 1))
+$lifeStripes = @(198, 56)
+
+Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+public static class Sff1 {
+    static int U16(byte[] b, int o) { return b[o] | (b[o + 1] << 8); }
+    static int I32(byte[] b, int o) { return BitConverter.ToInt32(b, o); }
+    static void P16(byte[] b, int o, int v) { b[o] = (byte)v; b[o + 1] = (byte)(v >> 8); }
+    static void P32(byte[] b, int o, int v) { Array.Copy(BitConverter.GetBytes(v), 0, b, o, 4); }
+
+    // Removes columns [from, from + count) of an 8-bit PCX image, keeping whatever follows the pixels (palette).
+    static byte[] CutPcx(byte[] d, int from, int count) {
+        if (d[3] != 8 || d[65] != 1) throw new Exception("PCX nao suportado");
+        int w = U16(d, 8) - U16(d, 4) + 1, h = U16(d, 10) - U16(d, 6) + 1, bpl = U16(d, 66);
+        if (from < 0 || from + count > w) throw new Exception("corte fora do sprite");
+        int p = 128;
+        byte[][] rows = new byte[h][];
+        for (int y = 0; y < h; y++) {
+            rows[y] = new byte[bpl];
+            for (int x = 0; x < bpl; ) {
+                int v = d[p++], run = 1;
+                if ((v & 0xC0) == 0xC0) { run = v & 0x3F; v = d[p++]; }
+                for (; run > 0; run--, x++) if (x < bpl) rows[y][x] = (byte)v;
+            }
+        }
+        int nw = w - count, nbpl = nw + (nw & 1);
+        var o = new MemoryStream();
+        byte[] hdr = new byte[128];
+        Array.Copy(d, hdr, 128);
+        P16(hdr, 8, U16(d, 4) + nw - 1);
+        P16(hdr, 66, nbpl);
+        o.Write(hdr, 0, 128);
+        byte[] row = new byte[nbpl];
+        for (int y = 0; y < h; y++) {
+            Array.Clear(row, 0, nbpl);
+            Array.Copy(rows[y], 0, row, 0, from);
+            Array.Copy(rows[y], from + count, row, from, w - from - count);
+            for (int i = 0; i < nbpl; ) {
+                int run = 1;
+                while (i + run < nbpl && row[i + run] == row[i] && run < 63) run++;
+                if (run > 1 || (row[i] & 0xC0) == 0xC0) o.WriteByte((byte)(0xC0 | run));
+                o.WriteByte(row[i]);
+                i += run;
+            }
+        }
+        o.Write(d, p, d.Length - p);
+        return o.ToArray();
+    }
+
+    // SFF v1: rewrites the subfile list with the columns of sprite group,item cut out; the axis follows the pixels.
+    public static byte[] CutColumns(byte[] f, int group, int item, int from, int count) {
+        if (f.Length < 512 || f[15] != 1) throw new Exception("SFF v1 esperado");
+        int n = I32(f, 20), off = I32(f, 24), prev = -1, found = 0;
+        var o = new MemoryStream();
+        o.Write(f, 0, off);
+        for (int k = 0; k < n && off != 0; k++) {
+            int next = I32(f, off), len = I32(f, off + 4);
+            byte[] hdr = new byte[32];
+            Array.Copy(f, off, hdr, 0, 32);
+            byte[] data = new byte[len];
+            Array.Copy(f, off + 32, data, 0, len);
+            if (len > 0 && U16(hdr, 12) == group && U16(hdr, 14) == item) {
+                data = CutPcx(data, from, count);
+                short ax = BitConverter.ToInt16(hdr, 8);
+                if (from + count <= ax) P16(hdr, 8, ax - count);
+                found++;
+            }
+            int pos = (int)o.Position;
+            if (prev >= 0) { byte[] b = o.GetBuffer(); P32(b, prev, pos); }
+            P32(hdr, 0, 0);
+            P32(hdr, 4, data.Length);
+            o.Write(hdr, 0, 32);
+            o.Write(data, 0, data.Length);
+            prev = pos;
+            off = next;
+        }
+        if (found != 1) throw new Exception("sprite " + group + "," + item + " nao encontrado");
+        return o.ToArray();
+    }
+}
+"@
+
+function Convert-FightSff([string]$text) {
+    $bytes = $latin1.GetBytes($text)
+    foreach ($s in $lifeSprites) { $bytes = [Sff1]::CutColumns($bytes, $s[0], $s[1], $lifeStripes[0], $lifeStripes[1]) }
+    Write-Host "  fight.sff: fundo das barras de vida $($lifeStripes[1] * 3) unidades mais curto"
+    $latin1.GetString($bytes)
+}
+
+function Convert-FightMugen([string]$text) {
+    $split = Split-Lines $text
+    $lines = $split.lines
+    $face = $lifeCut - $motifCrop
+    $n = 0
+    foreach ($s in Get-StageSections $lines) {
+        $name = ($s.name -replace '\s+', ' ')
+        for ($i = $s.from + 1; $i -lt $s.to; $i++) {
+            $code = ($lines[$i] -replace ';.*$', '').Trim()
+            if ($code -notmatch '^(?i)(p(\d)\.(teammate\.)?pos|p(\d)\.range\.x|team(\d)\.pos|pos)\s*=') { continue }
+            $player = if ($Matches[2]) { [int]$Matches[2] } elseif ($Matches[4]) { [int]$Matches[4] } elseif ($Matches[5]) { [int]$Matches[5] } else { 0 }
+            $left = $player % 2 -eq 1
+            if ($code -match '^(?i)p\d\.range\.x') {
+                $lines[$i] = Add-ToValues $lines[$i] @(1) $(if ($left) { $lifeCut } else { -$lifeCut })
+            } elseif ($name -match 'lifebar\]$' -or $name -in "[time]", "[round]", "[winicon]") {
+                $lines[$i] = Add-ToValues $lines[$i] @(0) (-$motifCrop)
+            } elseif ($name -match '(face|name)\]$' -or $name -eq "[combo]") {
+                $dx = if ($name -eq "[combo]") { 0 } else { $face }
+                $lines[$i] = Add-ToValues $lines[$i] @(0) $(if ($left) { $dx } else { -2 * $motifCrop - $dx })
+            } else { continue }
+            $n++
+        }
+    }
+    if ($n -lt 40) { throw "data/fight.def: poucos elementos de HUD encontrados ($n); arquivo diferente do esperado." }
+    Write-Host "  fight.def: HUD em 960x720 ($n posicoes, barras de vida $lifeCut unidades mais curtas)"
+    Join-Lines $split
+}
+
+# ---------------------------------------------------------------- system.def (Ikemen)
+# Ikemen crops the sides of a 16:9 motif on a 4:3 screen. A 4:3 localcoord of the same width makes it fit the
+# width; absolute positions then move down by $shift to stay centred (positions relative to another element are
+# left alone).
 $motifAbsolute = @{
     "[title info]"               = @("menu.pos")
     "[select info]"              = @("pos", "title.offset", "p1.face.offset", "p2.face.offset", "p1.name.offset", "p2.name.offset",
@@ -172,6 +296,170 @@ function Convert-Motif([string]$text, [int]$shift) {
     }
     if ($n -lt 10 -or -not $road) { throw "data/system.def: poucos elementos de tela encontrados ($n); arquivo diferente do esperado." }
     Write-Host "  system.def: telas ajustadas para 4:3 ($n posicoes centralizadas)"
+    Join-Lines $split
+}
+
+# ---------------------------------------------------------------- system.def, select.def (MUGEN)
+# MUGEN 1.1 fits a 16:9 motif to the width of a 4:3 screen, centres it and clips its backgrounds to the 16:9 band.
+# A 960x720 localcoord keeps the original height instead: the screens fill the 4:3 frame with the original
+# vertical layout, 33% bigger, and lose 160 units on each side (background x is relative to the screen centre).
+$motifCrop = 160
+# The character grid has five blocks of portraits (x 100..1179) with a blank 40-unit column between them, too wide
+# for the narrower screen. The grid gets 8-unit columns (each character takes 5: itself and 4 blanks the cursor skips),
+# so the gap between blocks shrinks to one 8-unit column: 952 wide, block k moves by -96 - 32k.
+$gridBlocks = @(@(100, 300), @(340, 540), @(580, 700), @(740, 940), @(980, 1180))
+$gridColumns = 54
+$gridSplit = 5
+$gridRows = 2..7
+$gridGaps = @(11, 17, 21, 27)
+$gridLastColumn = 33
+# Select backgrounds by action: portrait sheets of a single block, and art spanning the whole grid (drawn once
+# per block through a window).
+$gridBlockActions = @{ 30 = 0; 31 = 0; 32 = 1; 33 = 1; 34 = 3; 35 = 3; 36 = 4; 37 = 4; 39 = 2; 40 = 1; 41 = 3 }
+$gridWideActions = @(2, 4, 7, 8)
+$selectFaceScale = "0.8,0.8"
+function Get-GridShift([int]$k) { -96 - 32 * $k }
+# New column of an old visible column (5 per old column, minus the 4 dropped from each gap before it).
+function Get-GridColumn([int]$col) { $gridSplit * $col - ($gridSplit - 1) * @($gridGaps | Where-Object { $_ -lt $col }).Count }
+
+$motifMugenX = @{
+    "[title info]"      = @{ "menu.pos" = -160 }
+    "[select info]"     = @{ "pos" = (Get-GridShift 0); "title.offset" = -160; "p2.face.offset" = -320; "p1.name.offset" = -160
+                             "p2.name.offset" = -160; "stage.pos" = -160; "p2.teammenu.pos" = -320 }
+    "[vs screen]"       = @{ "p1.pos" = -160; "p2.pos" = -160; "p1.name.pos" = -160; "p2.name.pos" = -160 }
+    "[continue screen]" = @{ "pos" = -160 }
+    "[victory screen]"  = @{ "winquote.offset" = -160 }
+}
+
+function Convert-MotifMugen([string]$text) {
+    $split = Split-Lines $text
+    $lines = $split.lines
+    $seps = $split.seps
+    $n = 0; $road = $false; $blocks = 0; $wide = 0
+    foreach ($s in Get-StageSections $lines) {
+        $name = ($s.name -replace '\s+', ' ')
+        if ($name -eq "[info]") {
+            $lc = Find-Key $lines $s "localcoord"
+            if ($lc) { $lines[$lc.i] = "localcoord = 960,720"; $n++ }
+            continue
+        }
+        $moves = $motifMugenX[$name]
+        if ($moves) {
+            foreach ($key in $moves.Keys) {
+                $k = Find-Key $lines $s ([regex]::Escape($key)); if ($k) { $lines[$k.i] = Add-ToValues $lines[$k.i] @(0) $moves[$key]; $n++ }
+            }
+        }
+        if ($name -eq "[select info]") {
+            $cols = Find-Key $lines $s "columns"
+            $spacing = Find-Key $lines $s "cell\.spacing"
+            $size = Find-Key $lines $s "cell\.size"
+            if (-not $cols -or [int]$cols.value -ne $gridColumns -or -not $spacing -or [int]($spacing.value -replace '\s*;.*$', '') -ne 40 -or
+                -not $size -or $size.value -notmatch '^0\s*,\s*25\b') { throw "data/system.def: grade de selecao diferente do esperado." }
+            $lines[$cols.i] = "columns = $($gridColumns * $gridSplit)"
+            $lines[$spacing.i] = "cell.spacing = $(40 / $gridSplit)"
+            $lines[$size.i] = "cell.size = 0,$(65 - 40 / $gridSplit)"
+            foreach ($p in "p1", "p2") {
+                $c = Find-Key $lines $s "$p\.cursor\.startcell"
+                if ($c) {
+                    $col = [int](($c.value -split ',')[1] -replace '[^\d]', '')
+                    $lines[$c.i] = Add-ToValues $lines[$c.i] @(1) ((Get-GridColumn $col) - $col)
+                }
+                $f = Find-Key $lines $s "$p\.face\.scale"; if ($f) { $lines[$f.i] = "$p.face.scale = $selectFaceScale" }
+            }
+        }
+        if ($name -eq "[victory screen]") {
+            foreach ($key in "p1.window", "winquote.window") {
+                $w = Find-Key $lines $s ([regex]::Escape($key)); if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(2) (-2 * $motifCrop) }
+            }
+        }
+        $st = Find-Key $lines $s "start"
+        if ($name -match '^\[titlebg\s' -and $st -and (Find-Key $lines $s "spriteno").value -match '^9011\s*,\s*4\b') {
+            # The title road (sprite 9011,4, bottom 2 px below its axis) ended 26 px above the bottom.
+            $y = [double]::Parse(($st.value -split ',')[1].Trim(), $inv)
+            $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) (720 - 2 - $y)
+            $road = $true
+        }
+        if ($name -notmatch '^\[selectbg\s' -or -not $st) { continue }
+        $action = Find-Key $lines $s "actionno"
+        if (-not $action) { continue }
+        $a = [int]($action.value -replace '[^\d].*$', '')
+        if ($gridBlockActions.ContainsKey($a)) {
+            $lines[$st.i] = Add-ToValues $lines[$st.i] @(0) ((Get-GridShift $gridBlockActions[$a]) + $motifCrop)
+            $blocks++
+        } elseif ($a -in $gridWideActions) {
+            $nl = if ($seps[$s.from]) { $seps[$s.from] } else { "`r`n" }
+            $body = New-Object Text.StringBuilder
+            for ($k = 0; $k -lt $gridBlocks.Count; $k++) {
+                $dx = Get-GridShift $k
+                for ($i = $s.from; $i -lt $s.to; $i++) {
+                    $line = $lines[$i]
+                    if ($i -eq $st.i) {
+                        $line = (Add-ToValues $line @(0) ($dx + $motifCrop)) + "${nl}window = $($gridBlocks[$k][0] + $dx),0,$($gridBlocks[$k][1] + $dx - 1),719"
+                    }
+                    [void]$body.Append($line).Append($(if ($i -eq $s.to - 1) { $seps[$i] } else { $nl }))
+                }
+            }
+            for ($i = $s.from; $i -lt $s.to; $i++) { $lines[$i] = ""; $seps[$i] = "" }
+            $lines[$s.from] = $body.ToString()
+            $wide++
+        }
+    }
+    if ($n -lt 15 -or -not $road -or $blocks -ne $gridBlockActions.Count -or $wide -lt $gridWideActions.Count) {
+        throw "data/system.def: telas diferentes do esperado ($n posicoes, $blocks/$wide fundos da selecao)."
+    }
+    Write-Host "  system.def: telas em 960x720 ($n posicoes, grade de personagens com espacos menores entre blocos)"
+    Join-Lines $split
+}
+
+# Splits every column in 5 (the entry and 4 blanks); in the visible rows each gap between blocks keeps a single
+# column and the dropped blanks go to the end of the row, so every row keeps its length.
+function Convert-SelectGrid([string]$text) {
+    $split = Split-Lines $text
+    $lines = $split.lines
+    $entries = @(); $inChars = $false
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        $code = ($lines[$i] -replace ';.*$', '').Trim()
+        if ($code.StartsWith("[")) { if ($inChars) { break }; $inChars = $code -match '^\[characters\]$'; continue }
+        if ($inChars -and $code) { $entries += $i }
+    }
+    $extra = @{}
+    foreach ($row in $gridRows) {
+        $base = $row * $gridColumns
+        if ($entries.Count -le $base + $gridLastColumn) { throw "data/select.def: grade de personagens diferente do esperado." }
+        foreach ($c in $gridGaps) {
+            $i = $entries[$base + $c]
+            if (($lines[$i] -replace ';.*$', '').Trim() -ne "blank") { throw "data/select.def: espaco entre blocos nao encontrado (linha $($row), coluna $c)." }
+            $extra[$i] = 0
+        }
+        $extra[$entries[$base + $gridLastColumn]] = ($gridSplit - 1) * ($gridGaps.Count + 1)
+    }
+    foreach ($i in $entries) {
+        $blanks = if ($extra.ContainsKey($i)) { $extra[$i] } else { $gridSplit - 1 }
+        $nl = if ($split.seps[$i]) { $split.seps[$i] } else { "`r`n" }
+        $lines[$i] += ("${nl}blank" * $blanks)
+    }
+    Write-Host "  select.def: grade de personagens com espacos menores entre blocos"
+    Join-Lines $split
+}
+
+# Storyboards in a 370x280 localcoord centre their text on x = 170, which MUGEN shows at the centre of a 16:9 screen;
+# on 4:3 the centre is x = 185.
+function Convert-NarrowStoryboard([string]$text) {
+    $split = Split-Lines $text
+    $lines = $split.lines
+    $sections = @(Get-StageSections $lines)
+    $info = $sections | Where-Object { $_.name -eq "[info]" } | Select-Object -First 1
+    if (-not $info) { return $null }
+    $lc = Find-Key $lines $info "localcoord"
+    if (-not $lc -or $lc.value -notmatch '^370\s*,\s*280\b') { return $null }
+    foreach ($s in $sections | Where-Object { $_.name -match '^\[scene\s' }) {
+        $p = Find-Key $lines $s "layerall\.pos"
+        if ($p) { $lines[$p.i] = Add-ToValues $lines[$p.i] @(0) 15 }
+        else {
+            $nl = if ($split.seps[$s.from]) { $split.seps[$s.from] } else { "`r`n" }
+            $lines[$s.from] += "${nl}layerall.pos = 15,0"
+        }
+    }
     Join-Lines $split
 }
 
@@ -341,6 +629,14 @@ function Convert-Common([string]$text) {
     if ($refreshed -lt 2) { throw "data/common1.cns: explods de inicio de luta (LEVEL) nao encontrados." }
     $text = Join-Lines $split
 
+    if (-not $ikemen) {
+        # Score digits follow the ends of the lifebars, which moved with the bigger HUD (see Convert-FightMugen).
+        $score = 'ifelse( teamside=1 , 46.5 , 280.0 )'
+        $count = ([regex]::Matches($text, [regex]::Escape($score))).Count
+        if ($count -lt 10) { throw "data/common1.cns: posicao da pontuacao nao encontrada." }
+        $text = $text.Replace($score, 'ifelse( teamside=1 , 65 , 261.5 )')
+    }
+
     $powerY = 'fvar(39):= 197.5'
     if ($text.IndexOf($powerY) -lt 0) { throw "data/common1.cns: posicao da barra de power nao encontrada." }
     $text = $text.Replace($powerY, "fvar(39):= 197.5 + $hudBottomShift")
@@ -453,11 +749,9 @@ function Get-Targets {
         (Join-Path $root "data\fight.def"),
         (Join-Path $root "data\common1.cns")
     )
-    if (-not $ikemen) { $list += Join-Path $root "data\mugen.cfg" }
-    if ($ikemen) {
-        $list += Get-ChildItem -LiteralPath (Join-Path $root "data") -Filter *.def |
-            Select-String -Pattern '^\s*\[SceneDef\]' -List | ForEach-Object { $_.Path }
-    }
+    if (-not $ikemen) { $list += (Join-Path $root "data\mugen.cfg"), (Join-Path $root "data\select.def"), (Join-Path $root "data\fight.sff") }
+    $list += Get-ChildItem -LiteralPath (Join-Path $root "data") -Filter *.def |
+        Select-String -Pattern '^\s*\[SceneDef\]' -List | ForEach-Object { $_.Path }
     $list += Get-ChildItem -LiteralPath (Join-Path $root "stages") -Filter *.def | ForEach-Object { $_.FullName }
     $list += Get-ChildItem -LiteralPath (Join-Path $root "chars") -Recurse -File -Include *.cns, *.st, *.txt |
         Select-String -Pattern 'game(width|height)' -List | ForEach-Object { $_.Path }
@@ -505,10 +799,12 @@ function Invoke-Apply {
         $rel = Rel $path
         $new = switch -Wildcard ($rel) {
             "data\mugen.cfg"   { Set-VideoMode (Convert-Config $text $renderW $renderH) $Width $height; break }
-            "data\system.def"  { Convert-Motif $text $shift; break }
-            "data\fight.def"   { Convert-Fight $text $shift; break }
+            "data\system.def"  { if ($ikemen) { Convert-Motif $text $shift } else { Convert-MotifMugen $text }; break }
+            "data\select.def"  { Convert-SelectGrid $text; break }
+            "data\fight.def"   { if ($ikemen) { Convert-Fight $text $shift } else { Convert-FightMugen $text }; break }
+            "data\fight.sff"   { Convert-FightSff $text; break }
             "data\common1.cns" { Convert-Common $text; break }
-            "data\*.def"       { Convert-Storyboard $text; break }
+            "data\*.def"       { if ($ikemen) { Convert-Storyboard $text } else { Convert-NarrowStoryboard $text }; break }
             "stages\*"         { Convert-Stage $text; break }
             "chars\*"          { Convert-CharFile $text; break }
         }
