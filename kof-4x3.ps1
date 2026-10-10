@@ -578,6 +578,29 @@ function Convert-NarrowStoryboard([string]$text) {
     Join-Lines $split
 }
 
+# Story text is laid out for a 1280x960 board. On a 320x240 screen that board is drawn at a quarter size, so the
+# arcade story font is unreadably small. Ikemen scales a text layer with layerN.font.scale.
+function Add-StoryFontScale([string]$text) {
+    if ($text -notmatch '(?i)StoryFont') { return $null }
+    $split = Split-Lines $text
+    $lines = $split.lines
+    $n = 0
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -notmatch '^(?i)\s*layer(\d+)\.font\s*=') { continue }
+        $key = "layer$($Matches[1]).font.scale"
+        $have = $false
+        for ($j = $i + 1; $j -lt [Math]::Min($i + 8, $lines.Length); $j++) {
+            if ($lines[$j] -match "(?i)^\s*$([regex]::Escape($key))\s*=") { $have = $true; break }
+        }
+        if ($have) { continue }
+        $nl = if ($split.seps[$i]) { $split.seps[$i] } else { "`n" }
+        $lines[$i] += "${nl}$key = 2,2"
+        $n++
+    }
+    if (-not $n) { return $null }
+    Join-Lines $split
+}
+
 # Ikemen gives storyboards without a localcoord the motif localcoord; MUGEN gives them 320x240, which is what they
 # are laid out for (e.g. the intro).
 function Add-StoryboardLocalcoord([string]$text) {
@@ -1139,6 +1162,10 @@ function Invoke-Apply {
                 $board = if ($ikemen) { Add-StoryboardLocalcoord $text }
                 if ($null -eq $board) { $board = Convert-NarrowStoryboard $text }
                 if ($null -eq $board) { $board = Convert-Storyboard $text }
+                if ($ikemen) {
+                    $scaled = Add-StoryFontScale $(if ($board) { $board } else { $text })
+                    if ($scaled) { $board = $scaled }
+                }
                 $board; break
             }
             "stages\*"         { Convert-Stage $text ([IO.Path]::GetFileNameWithoutExtension($rel)); break }
