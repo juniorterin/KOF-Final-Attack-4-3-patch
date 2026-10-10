@@ -112,12 +112,51 @@ powershell -ExecutionPolicy Bypass -File kof-ikemen.ps1 [-Out pasta] [-Width 320
 | `-Windowed` | Começa em janela (o padrão é tela cheia, como no gabinete) |
 | `-Widescreen` | Converte para o Ikemen sem aplicar o 4:3 |
 
-Para rodar: `Ikemen_GO.exe` no Windows; no Linux, `chmod +x Ikemen_GO_Linux` e `./Ikemen_GO_Linux` a partir da
-pasta do jogo. No FliperOS o teste foi feito com o mesmo Switchres (320x240@60) que o `fliperos-x11-run` usa;
-de um terminal (TTY), `cd` para a pasta e `fliperos-x11-run ./Ikemen_GO_Linux` deve abrir o jogo do mesmo
-jeito (esse atalho em si não foi testado).
+A conversão em si roda no Windows (o script usa o PowerShell e o `robocopy`). Ela já deixa o 4:3 aplicado.
+Para uma pasta só de Linux:
 
-O 4:3 da pasta Ikemen também pode ser desfeito e refeito com o mesmo `kof-4x3.ps1`:
+```powershell
+powershell -ExecutionPolicy Bypass -File kof-ikemen.ps1 -Platform linux
+```
+
+O padrão (`-Platform both`) serve para os dois sistemas: a mesma pasta tem `Ikemen_GO.exe` e `Ikemen_GO_Linux`.
+
+### Rodar no Linux
+
+Copie a pasta inteira `KOF Final Attack Ikemen` para o Linux (não basta o executável: personagens, cenários,
+telas, fontes, sons, `lib/` e `save/` vão juntos). Na pasta do jogo:
+
+```bash
+chmod +x Ikemen_GO_Linux
+./Ikemen_GO_Linux
+```
+
+O jogo abre em tela cheia, em 320x240. Para janela, na conversão use `-Windowed`, ou depois ponha
+`Fullscreen = 0` em `save/config.ini`. A primeira execução é lenta enquanto os cerca de 2 GB do jogo entram
+no cache do disco. O SDL usado é o que vem em `lib/`.
+
+Num gabinete FliperOS o teste foi feito com o mesmo Switchres (320x240@60) do `fliperos-x11-run`. De um
+terminal (TTY), na pasta do jogo:
+
+```bash
+fliperos-x11-run ./Ikemen_GO_Linux
+```
+
+Para gerar a pasta no Linux, ou refazer o 4:3 numa pasta que já está lá, use o PowerShell 7 (`pwsh`).
+No Linux a cópia dos arquivos não usa `robocopy`:
+
+```bash
+pwsh -File kof-ikemen.ps1 -Platform linux
+pwsh -File kof-4x3.ps1 -Action apply -Width 320 -GameDir "/caminho/KOF Final Attack Ikemen"
+pwsh -File kof-4x3.ps1 -Action restore -GameDir "/caminho/KOF Final Attack Ikemen"
+```
+
+`-CoinOp` liga o modo ficha: o jogo abre no attract, só com o arcade, e a tecla F6 insere uma ficha. Vale para
+`kof-4x3.ps1` e para `kof-ikemen.ps1`.
+
+O script reconhece a pasta pelo `Ikemen_GO_Linux`. O backup fica em `backup-widescreen/` dentro dela.
+
+No Windows, a partir da pasta `Patch 4x3`, o 4:3 da pasta Ikemen também pode ser desfeito e refeito:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File kof-4x3.ps1 -Action restore -GameDir "..\..\KOF Final Attack Ikemen"
@@ -135,10 +174,11 @@ como no arcade):
 | Arquivo | Alteração no Ikemen |
 |---|---|
 | `save/config.ini` | `GameWidth/GameHeight` = `WindowWidth/WindowHeight` = resolução escolhida (renderização direta, sprites nítidos), `FightAspect` = resolução (4:3). Na restauração só essas chaves voltam |
-| `stages/*.def` | Zoom 1.14375 (personagens 1:1 em 320 de largura); cenários de até 400 de largura recebem `localcoord = 366` (arte 1:1), chão em `zoffset = 248` (pé em y≈216, como no arcade) e limites de câmera proporcionais. Cenários com menos arte abaixo do chão têm o chão um pouco mais baixo, para a arte chegar à base da tela |
-| `data/common1.cns`, `chars/*` | Explods ancorados na tela usam `screenwidth/screenheight`, gatilhos do Ikemen que dão o tamanho da tela sem zoom. Medidor de power, pontuação, modo MAX, LEVEL e nomes do VS recebem escala 8/7 (1:1 em 320x240); topo do HUD 6 px mais baixo e HUD de baixo 10 px acima da borda, fora do overscan do CRT |
-| `data/system.def`, `data/select.def` | Grade de seleção com 2 px entre os blocos de times (deslocamento por coluna, `cell.N-*.offset`), margem nas laterais e no topo |
-| `data/*.def` (storyboards) | Sem `localcoord` recebem `320,240`; os de 370x280 mostram o centro 320x240 em 1:1 |
+| `stages/*.def` | Zoom 1.14375 (personagens 1:1 em 320 de largura); cenários de até 400 de largura recebem `localcoord = 366` (arte 1:1). A arte chega à base da tela; os pés ficam 2,5 px abaixo dessa base. No Brazil 94 a copa sobe 8 px para encostar no topo. Limites de câmera proporcionais. Cenários com menos arte abaixo do chão descem um pouco mais, e os pés acompanham |
+| `data/fight.def` | Contador de hits na escala 2.4, 10 px mais baixo. Ícones de round em 1:1 (escala 3). O anúncio FIGHT fica em 2 e o ROUND n em 3.5 |
+| `data/common1.cns`, `chars/*` | Explods ancorados na tela usam `screenwidth/screenheight`, gatilhos do Ikemen que dão o tamanho da tela sem zoom. Medidor de power, pontuação, modo MAX, LEVEL e nomes do VS recebem escala 8/7 (1:1 em 320x240); topo do HUD 6 px mais baixo e HUD de baixo 10 px acima da borda, fora do overscan do CRT. O letreiro WINNER fica no dobro do tamanho. O juiz do 1994 EUA fica no chão, em 1:1 |
+| `data/system.def`, `data/select.def`, `font/stage.fnt` | Grade de seleção com 2 px entre os blocos de times (deslocamento por coluna, `cell.N-*.offset`), margem nas laterais e no topo. O rodapé do título some. A lista de golpes (segure Start) desce um pouco e a fonte dobra. A miniatura do México 94 entra no lugar das outras e usa a arte desse cenário. A tela antes da luta não fica branca. A vitória limpa o fundo de preto. Com `-CoinOp`, o attract fica ligado |
+| `data/*.def` (storyboards) | Sem `localcoord` recebem `320,240`; os de 370x280 mostram o centro 320x240 em 1:1. A fonte da história do arcade dobra |
 | `data/common1.cns.zss` | Removido da cópia: o Ikemen daria preferência a ele, e o HUD do jogo está no `common1.cns` |
 
 ## Observações
