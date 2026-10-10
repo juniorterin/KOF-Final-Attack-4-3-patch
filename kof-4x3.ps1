@@ -414,6 +414,23 @@ function Convert-MotifMugen([string]$text) {
             if ($lc) { $lines[$lc.i] = "localcoord = 960,720"; $n++ }
             continue
         }
+        if ($ikemen -and $name -eq "[title info]") {
+            $nlInfo = if ($seps[$s.from]) { $seps[$s.from] } else { "`n" }
+            # Ikemen draws the engine footer (version, "press F1", copyright) over the title. Scale 0 hides it.
+            $lines[$s.from] += "${nlInfo}footer.title.scale = 0,0${nlInfo}footer.info.scale = 0,0${nlInfo}footer.version.scale = 0,0"
+        }
+        if ($ikemen -and $name -eq "[vs screen]") {
+            # fadein.time 90000 from white holds a white screen before the fight.
+            for ($i = $s.from + 1; $i -lt $s.to; $i++) {
+                if ($lines[$i] -match '(?i)fadein\.time\s*=\s*90000') { $lines[$i] = $lines[$i] -replace '90000', '0' }
+                if ($lines[$i] -match '(?i)fadein\.col\s*=\s*255\s*,\s*255\s*,\s*255') { $lines[$i] = $lines[$i] -replace '255\s*,\s*255\s*,\s*255', '0,0,0' }
+            }
+        }
+        if ($ikemen -and $name -eq "[victorybgdef]") {
+            $nlV = if ($seps[$s.from]) { $seps[$s.from] } else { "`n" }
+            # Without a clear colour the quote wipes reveal the stage behind them.
+            $lines[$s.from] += "${nlV}bgclearcolor = 0,0,0"
+        }
         $moves = $motifMugenX[$name]
         if ($moves) {
             foreach ($key in $moves.Keys) {
@@ -490,7 +507,13 @@ function Convert-MotifMugen([string]$text) {
         throw "data/system.def: telas diferentes do esperado ($n posicoes, $blocks/$wide fundos da selecao)."
     }
     Write-Host "  system.def: telas em 960x720 ($n posicoes, grade de personagens com espacos menores entre blocos)"
-    Join-Lines $split
+    $text = Join-Lines $split
+    if ($ikemen) {
+        # The command list (hold Start) sits at y 20 with a 0.4 font, under the lifebars and hard to read.
+        $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+        $text += "${nl}${nl}[Pause Menu]${nl}movelist.pos = 10,36${nl}movelist.title.scale = 0.8,0.8${nl}movelist.text.scale = 0.8,0.8${nl}"
+    }
+    $text
 }
 
 # Splits every column in 5 (the entry and 4 blanks); in the visible rows each gap between blocks keeps a single
