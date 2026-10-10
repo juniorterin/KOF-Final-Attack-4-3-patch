@@ -38,8 +38,9 @@ O patch não altera o modo janela/tela cheia. No CRT, use `Alt+Enter` no jogo ou
 | Arquivo | Alteração |
 |---|---|
 | `data/mugen.cfg` | `GameWidth/GameHeight` = resolução de renderização; `[Video] Width/Height` = resolução de saída |
+| `data/system.def` | Telas em `localcoord = 1280,960`, ocupando a tela 4:3 inteira; posições absolutas descem 120 unidades e a estrada do título encosta na base |
 | `data/fight.def` | Anúncios (Round, Fight, KO) centralizados na tela 4:3 |
-| `data/common1.cns` | HUD de luta (barras de power, estoques, ícones, banner VS) reposicionado para a tela 4:3 |
+| `data/common1.cns` | HUD de luta (barras de power, estoques, ícones, banner VS, texto LEVEL) reposicionado para a tela 4:3; fundo do MODE SELECT estendido até a base |
 | `stages/*.def` | Zoom fixo de câmera 4:3 e ajuste de enquadramento |
 | `chars/*` (14 arquivos) | Efeitos de tela dos supers centralizados corretamente sob o zoom |
 
@@ -66,7 +67,9 @@ transforma a imagem em um **recorte 4:3 fiel** do widescreen:
 - **Renderização:** o MUGEN 1.1 desloca storyboards 4:3 (abertura e intro) em larguras baixas. Por isso,
   resoluções de saída abaixo de 960 px são renderizadas em 960x720 e reduzidas pelo próprio engine
   (`[Video] Width/Height`), o que também deixa a imagem mais limpa em 320x240.
-- **Menus** (título, seleção) continuam com o layout original, centralizados (letterbox).
+- **Menus:** com um motif 16:9 o MUGEN 1.1 centraliza as telas e recorta os fundos na faixa 16:9, deixando
+  barras pretas. O `system.def` passa a declarar `localcoord = 1280,960`: os fundos vão até a borda da tela e o
+  layout original fica centralizado (posições absolutas +120). A estrada animada do título é ancorada na base.
 
 ## Versão Ikemen GO
 
@@ -116,7 +119,6 @@ O zoom dos cenários e o reposicionamento do HUD são os mesmos. O que muda:
 | `save/config.ini` | `GameWidth/GameHeight` = renderização (960x720), `WindowWidth/WindowHeight` = saída (320x240), `FightAspect` = resolução (4:3). Na restauração só essas chaves voltam |
 | `data/common1.cns`, `chars/*` | Explods ancorados na tela usam `screenwidth/screenheight`, gatilhos do Ikemen que dão o tamanho da tela sem zoom (no Ikemen `gamewidth/gameheight` não seguem a regra do MUGEN) |
 | `data/fight.def` | Recebe `[Info] localcoord = 1280,720`, que antes vinha implícito do `system.def` |
-| `data/system.def` | O Ikemen corta as laterais de um motif 16:9 numa tela 4:3, e o MUGEN 1.1 encaixa a largura. O patch declara `localcoord = 1280,960` e desce as posições absolutas (menu do título, seleção, VS, continue, vitória, fundos) em 120 unidades, centralizando como no MUGEN |
 | `data/story.def`, `data/ending.def` | Storyboards 1080x720 eram vistos pela moldura 16:9 (o texto começa fora da área 1080). Viram `localcoord = 1280,960` com as cenas deslocadas, mostrando a mesma área do widescreen |
 | `data/common1.cns.zss` | Removido da cópia: o Ikemen daria preferência a ele, e o HUD do jogo está no `common1.cns` |
 

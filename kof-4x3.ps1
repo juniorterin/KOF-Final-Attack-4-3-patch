@@ -117,10 +117,11 @@ function Convert-Fight([string]$text, [int]$shift) {
     $text
 }
 
-# ---------------------------------------------------------------- system.def (Ikemen)
-# MUGEN 1.1 fits a 16:9 motif to the width of a 4:3 screen and centres it vertically; Ikemen crops its sides
-# instead. A 4:3 localcoord of the same width makes Ikemen fit the width; absolute positions then move down
-# by $shift to stay centred (positions relative to another element are left alone).
+# ---------------------------------------------------------------- system.def
+# MUGEN 1.1 fits a 16:9 motif to the width of a 4:3 screen, centres it and clips its backgrounds to the 16:9
+# band; Ikemen crops its sides instead. A 4:3 localcoord of the same width makes both fit the width and draw on
+# the whole screen; absolute positions then move down by $shift to stay centred (positions relative to another
+# element are left alone).
 $motifAbsolute = @{
     "[title info]"               = @("menu.pos")
     "[select info]"              = @("pos", "title.offset", "p1.face.offset", "p2.face.offset", "p1.name.offset", "p2.name.offset",
@@ -136,7 +137,7 @@ $motifWindows = @("p1.window", "p2.window", "winquote.window", "window", "maskwi
 function Convert-Motif([string]$text, [int]$shift) {
     $split = Split-Lines $text
     $lines = $split.lines
-    $n = 0
+    $n = 0; $road = $false
     foreach ($s in Get-StageSections $lines) {
         $name = ($s.name -replace '\s+', ' ')
         if ($name -eq "[info]") {
@@ -150,6 +151,16 @@ function Convert-Motif([string]$text, [int]$shift) {
             $link = Find-Key $lines $s "positionlink"
             if ($link -and $link.value -match '^1') { continue }
             $keys = @("start")
+            # The title road (sprite 9011,4, bottom 2 px below its axis) ended 26 px above the 16:9 bottom;
+            # it now reaches the bottom of the 4:3 screen.
+            $spr = Find-Key $lines $s "spriteno"
+            $st = Find-Key $lines $s "start"
+            if ($name -match '^\[titlebg\s' -and $spr -and $spr.value -match '^9011\s*,\s*4\b' -and $st) {
+                $y = [double]::Parse(($st.value -split ',')[1].Trim(), $inv)
+                $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) ($motifSize[0] * 3 / 4 - 2 - $y)
+                $n++; $road = $true
+                continue
+            }
         }
         foreach ($key in @($keys)) {
             if (-not $key) { continue }
@@ -159,7 +170,7 @@ function Convert-Motif([string]$text, [int]$shift) {
             $w = Find-Key $lines $s ([regex]::Escape($key)); if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(1, 3) $shift; $n++ }
         }
     }
-    if ($n -lt 10) { throw "data/system.def: poucos elementos de tela encontrados ($n); arquivo diferente do esperado." }
+    if ($n -lt 10 -or -not $road) { throw "data/system.def: poucos elementos de tela encontrados ($n); arquivo diferente do esperado." }
     Write-Host "  system.def: telas ajustadas para 4:3 ($n posicoes centralizadas)"
     Join-Lines $split
 }
@@ -270,6 +281,37 @@ function Convert-ScreenSize([string[]]$lines) {
     $n
 }
 
+# The camera zoom only takes effect after the first tick, so screen explods created on "!time" read the unzoomed
+# gamewidth/gameheight and land off-screen. A ModifyExplod right after them repositions them from then on
+# (only when the ID is unique in its state, so other explods are not moved).
+function Add-ZoomRefresh([string[]]$lines, [string]$nl) {
+    $n = 0
+    $blocks = @(Get-Blocks $lines)
+    $states = @(); $cur = @()
+    foreach ($b in $blocks) {
+        if ($lines[$b.from] -match '^\s*\[\s*(?i)statedef') { if ($cur.Count) { $states += , $cur }; $cur = @() }
+        $b.id = $null; $b.created = $false
+        for ($i = $b.from + 1; $i -lt $b.to; $i++) {
+            $code = ($lines[$i] -replace ';.*$', '').Trim()
+            if ($code -match '^(?i)id\s*=\s*(\d+)$') { $b.id = $Matches[1] }
+            elseif ($code -match '^(?i)trigger1\s*=\s*!\s*time$') { $b.created = $true }
+        }
+        $cur += $b
+    }
+    if ($cur.Count) { $states += , $cur }
+    foreach ($state in $states) {
+        foreach ($b in $state) {
+            if ($b.type -ne "explod" -or -not $b.created -or -not $b.id -or $b.posIdx -lt 0 -or $b.postype -notin @("left", "right")) { continue }
+            $pos = ($lines[$b.posIdx] -replace ';.*$', '').Trim()
+            if ($pos -notmatch [regex]::Escape($screenWidth) -and $pos -notmatch [regex]::Escape($screenHeight)) { continue }
+            if (@($state | Where-Object { $_.type -eq "explod" -and $_.id -eq $b.id }).Count -gt 1) { continue }
+            $lines[$b.to - 1] += "${nl}[State 0, ModifyExplod 4:3]${nl}type = ModifyExplod${nl}trigger1 = time > 0${nl}ID = $($b.id)${nl}postype = $($b.postype)${nl}$pos${nl}"
+            $n++
+        }
+    }
+    $n
+}
+
 # Screen-anchored HUD pieces near the bottom of the 16:9 frame (y 150..230) are moved to the bottom of the 4:3 screen.
 function Convert-Common([string]$text) {
     $split = Split-Lines $text
@@ -294,11 +336,22 @@ function Convert-Common([string]$text) {
         $counter.n++
     }
     foreach ($b in Get-Blocks $lines) { & $flush $b }
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $refreshed = Add-ZoomRefresh $lines $nl
+    if ($refreshed -lt 2) { throw "data/common1.cns: explods de inicio de luta (LEVEL) nao encontrados." }
     $text = Join-Lines $split
 
     $powerY = 'fvar(39):= 197.5'
     if ($text.IndexOf($powerY) -lt 0) { throw "data/common1.cns: posicao da barra de power nao encontrada." }
     $text = $text.Replace($powerY, "fvar(39):= 197.5 + $hudBottomShift")
+
+    # The MODE SELECT backdrop only covers a 16:9 screen; a second copy underneath fills the extra 4:3 height
+    # with its lower black band (the fighters would show through there otherwise).
+    $backdrop = [regex]::Match($text, '\[State 0, Striker Setup Top BG\]\r?\n(?:(?!\r?\n\r?\n)[\s\S])*?postype = back[^\r\n]*\r?\n')
+    if (-not $backdrop.Success -or $backdrop.Value -notmatch 'anim = f199890') { throw "data/common1.cns: fundo da tela MODE SELECT nao encontrado." }
+    $nl = if ($backdrop.Value.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $cover = ($backdrop.Value -replace '\]', ' 4:3]' -replace '19990', '19989' -replace 'fvar\(39\)', "fvar(39) + $hudBottomShift" -replace 'sprpriority=95', 'sprpriority=94')
+    $text = $text.Insert($backdrop.Index + $backdrop.Length, $nl + $cover)
     if ($counter.n -lt 10 -or $sized -lt 10) { throw "data/common1.cns: poucos elementos de HUD encontrados ($($counter.n)/$sized); arquivo diferente do esperado." }
     Write-Host "  common1.cns: $($counter.n + 1) elementos de HUD ancorados na base da tela, $sized compensados para o zoom"
     $text
@@ -396,10 +449,11 @@ function Convert-Stage([string]$text) {
 # ---------------------------------------------------------------- actions
 function Get-Targets {
     $list = @(
-        (Join-Path $root $(if ($ikemen) { "data\system.def" } else { "data\mugen.cfg" })),
+        (Join-Path $root "data\system.def"),
         (Join-Path $root "data\fight.def"),
         (Join-Path $root "data\common1.cns")
     )
+    if (-not $ikemen) { $list += Join-Path $root "data\mugen.cfg" }
     if ($ikemen) {
         $list += Get-ChildItem -LiteralPath (Join-Path $root "data") -Filter *.def |
             Select-String -Pattern '^\s*\[SceneDef\]' -List | ForEach-Object { $_.Path }
