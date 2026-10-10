@@ -5,7 +5,8 @@ param(
     [ValidateSet("apply", "restore", "status")]
     [string]$Action = "status",
     [int]$Width = 320,
-    [string]$GameDir = ""
+    [string]$GameDir = "",
+    [switch]$CoinOp
 )
 
 $ErrorActionPreference = "Stop"
@@ -512,6 +513,10 @@ function Convert-MotifMugen([string]$text) {
         # The command list (hold Start) sits at y 20 with a 0.4 font, under the lifebars and hard to read.
         $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
         $text += "${nl}${nl}[Pause Menu]${nl}movelist.pos = 10,36${nl}movelist.title.scale = 0.8,0.8${nl}movelist.text.scale = 0.8,0.8${nl}"
+        if ($CoinOp) {
+            # Attract mode starts at 0 credits. F6 inserts a coin; the attract menu is arcade only.
+            $text += "${nl}${nl}[Attract Mode]${nl}enabled = 1${nl}"
+        }
     }
     $text
 }

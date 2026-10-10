@@ -7,7 +7,8 @@ param(
     [ValidateSet("both", "windows", "linux")]
     [string]$Platform = "both",
     [switch]$Windowed,
-    [switch]$Widescreen
+    [switch]$Widescreen,
+    [switch]$CoinOp
 )
 
 $ErrorActionPreference = "Stop"
@@ -118,7 +119,9 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Out "save") | Out-Null
 if ($Widescreen) {
     Write-Host "Ikemen GO pronto em widescreen (sem patch 4:3)."
 } else {
-    & (Join-Path $patchDir "kof-4x3.ps1") -Action apply -Width $Width -GameDir $Out
+    $patchArgs = @{ Action = "apply"; Width = $Width; GameDir = $Out }
+    if ($CoinOp) { $patchArgs.CoinOp = $true }
+    & (Join-Path $patchDir "kof-4x3.ps1") @patchArgs
 }
 Write-Host ""
 Write-Host "Pronto: $Out"
