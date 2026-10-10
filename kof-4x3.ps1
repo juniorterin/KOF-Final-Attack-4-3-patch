@@ -1013,6 +1013,16 @@ function Convert-Stage([string]$text, [string]$name) {
     # Retargeted stages show 320 units across instead of localcoord/zoom, so the bounds grow only by what the
     # widescreen view showed beyond that.
     if ($retarget) { $bound = [math]::Max(0, [math]::Floor($oldWidth / 2 - 160)) }
+    # The select thumbnail is the stage name, drawn centered in stage.fnt, where a space is 185 units wide.
+    # The other 94 stages use five spaces and a trailing space, which puts the glyph in the box. Mexico is
+    # only "\", so its picture sits 370 units to the left. The glyph art is retargeted in the font below.
+    if ($ikemen -and $name -eq "1994-mexico") {
+        $renamed = $false
+        for ($i = 0; $i -lt $lines.Length; $i++) {
+            if ($lines[$i] -match '^\s*name\s*=\s*"\\"\s*$') { $lines[$i] = 'name = "     \ "'; $renamed = $true; break }
+        }
+        if (-not $renamed) { throw "1994-mexico: nome do cenario nao encontrado" }
+    }
     $footDelta = $null
     if ($retarget -and $null -ne $zoffset) {
         if (-not $linked) {
@@ -1135,6 +1145,14 @@ function Invoke-Apply {
             "chars\*"          { Convert-CharFile $text; break }
         }
         if ($new -and $new -ne $text) { $changes[$path] = $new }
+    }
+    if ($ikemen) {
+        # "\" and "S" both pointed at the USA thumbnail. The Mexico art sits 183 px further along, unmapped.
+        $fontPath = Join-Path $root "font\stage.fnt"
+        $font = Read-Text $fontPath
+        $glyph = $font.Replace('\ 16465 185 ; 1994 Mexico', '\ 17607 185 ; 1994 Mexico')
+        if ($glyph -eq $font) { throw "stage.fnt: miniatura do Mexico nao encontrada" }
+        $changes[$fontPath] = $glyph
     }
 
     New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
