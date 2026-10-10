@@ -40,8 +40,8 @@ O patch não altera o modo janela/tela cheia. No CRT, use `Alt+Enter` no jogo ou
 | `data/mugen.cfg` | `GameWidth/GameHeight` = resolução de renderização; `[Video] Width/Height` = resolução de saída |
 | `data/system.def` | Telas em `localcoord = 960,720` (tela 4:3 inteira, na proporção do original); grade de seleção com espaços menores entre blocos, retrato maior, estrada do título até a base |
 | `data/select.def` | Grade em colunas de 8 unidades (cada personagem ocupa 5); o espaço entre blocos fica com uma coluna |
-| `data/fight.def` | HUD de luta em 960x720: tempo, ícones e anúncios centralizados, P2 alinhado à direita, barras de vida mais curtas |
-| `data/fight.sff` | Fundo das barras de vida (sprites 10,0 e 10,1) com 4 segmentos listrados a menos |
+| `data/fight.def` | HUD de luta em 960x720: tempo, ícones e anúncios centralizados, P2 alinhado à direita, barras de vida mais curtas; `[FightFx] scale` reduzido na mesma proporção do `localcoord` |
+| `data/fight.sff` | Fundo das barras de vida (sprites 10,0 e 10,1) com 3 segmentos listrados a menos; moldura do rosto (10,0) mais estreita |
 | `data/common1.cns` | HUD de luta (pontuação, barras de power, estoques, ícones, banner VS, texto LEVEL) reposicionado para a tela 4:3; fundo do MODE SELECT estendido até a base |
 | `data/logo.def`, `data/credits.def` | Textos centralizados no 4:3 |
 | `data/story.def`, `data/ending.def` | Storyboards 1080x720 viram `localcoord = 1280,960` mostrando a moldura 16:9 inteira (o texto passa da área 1080 e seria cortado); nas cenas de fundo branco a faixa preta da moldura é estendida até as bordas |
@@ -78,8 +78,14 @@ transforma a imagem em um **recorte 4:3 fiel** do widescreen:
   de 8 (cada personagem seguido de 4 vazias, que o cursor pula) e as artes da grade são desenhadas por bloco
   (`window`).
 - **HUD de luta:** o `fight.def` usa o `localcoord` do `system.def`, então o HUD volta à proporção do original.
-  Para caber em 960 de largura, as barras de vida ficam 168 unidades mais curtas: o fundo delas no `fight.sff`
-  perde 56 px da faixa listrada (4 períodos do padrão, sem emenda) e o `range` das barras encurta junto.
+  Para caber em 960 de largura, as barras de vida ficam 126 unidades mais curtas: o fundo delas no `fight.sff`
+  perde 42 px da faixa listrada (3 períodos do padrão, sem emenda) e o `range` das barras encurta junto. A
+  moldura do rosto no modo single perde a sobra ao lado do retrato e, nos modos em equipe (sem moldura), a
+  barra mais longa ocupa o espaço que sobrava ao lado do retrato.
+- **Cenários e efeitos:** os cenários deste jogo são desenhados por explods do `common1.cns` com sprites do
+  FightFx, que o MUGEN escala pelo `localcoord` do HUD. Como esse `localcoord` passou de 1280 para 960 de
+  largura, o `scale` do `[FightFx]` cai na mesma proporção (3.5 → 2.625) e cenários, faíscas e efeitos mantêm o
+  tamanho do original em relação aos personagens.
 
 ## Versão Ikemen GO
 
@@ -152,4 +158,5 @@ continuam no layout 16:9 centralizado (sem a grade compacta nem o HUD ampliado).
   `-GameDir` e reconhece pastas do Ikemen.
 - **1.2** — MUGEN: telas em 960x720 preenchendo o 4:3 (título, seleção com grade compacta e retrato maior),
   HUD de luta na proporção do original com barras de vida mais curtas, fundo do MODE SELECT até a base, texto
-  LEVEL no início da luta, tela de logo e créditos centralizadas, texto da história e do final sem cortes.
+  LEVEL no início da luta, tela de logo e créditos centralizadas, texto da história e do final sem cortes,
+  barras de vida mais longas ocupando a sobra ao lado do rosto, cenários e efeitos na proporção do original.

@@ -121,10 +121,19 @@ function Convert-Fight([string]$text, [int]$shift) {
 # fight.def is laid out in the motif localcoord, now 960 wide: the HUD keeps its original size relative to the
 # screen height. Centre elements move by -160 and P2 elements by -320; the lifebars lose $lifeCut units so
 # everything fits. Their background sprites (face frame + striped bar + half of the timer box, 3x scale) lose
-# 56 px of stripes (4 periods of the pattern), so the face frames move $lifeCut - 160 towards the centre.
-$lifeCut = 168
+# 42 px of stripes (3 periods of the pattern), so faces and names move by $lifeCut - 160 (towards the centre when positive).
+$lifeCut = 126
 $lifeSprites = @(@(10, 0), @(10, 1))
-$lifeStripes = @(198, 56)
+$lifeStripes = @(198, 42)
+# The single background (10,0) frames the face with room to spare: 11 px of the frame's plain interior go too, so
+# the frame stays at the screen edge and the face moves with it. The team background (10,1) has no frame and its
+# portraits keep their place, with the longer bar filling the gap next to them.
+$frameSprite = @(10, 0)
+$frameCut = @(150, 11)
+$teamFaceShift = 42
+# FightFx sprites (hit sparks, and the stage art drawn by common1.cns explods) are scaled in the same localcoord, so
+# their scale shrinks with it to keep their size.
+function Get-FxScale { 960 / (960 + 2 * $motifCrop) }
 
 Add-Type -TypeDefinition @"
 using System;
@@ -210,7 +219,8 @@ public static class Sff1 {
 function Convert-FightSff([string]$text) {
     $bytes = $latin1.GetBytes($text)
     foreach ($s in $lifeSprites) { $bytes = [Sff1]::CutColumns($bytes, $s[0], $s[1], $lifeStripes[0], $lifeStripes[1]) }
-    Write-Host "  fight.sff: fundo das barras de vida $($lifeStripes[1] * 3) unidades mais curto"
+    $bytes = [Sff1]::CutColumns($bytes, $frameSprite[0], $frameSprite[1], $frameCut[0], $frameCut[1])
+    Write-Host "  fight.sff: fundo das barras de vida $($lifeStripes[1] * 3) unidades mais curto, moldura do rosto $($frameCut[1] * 3) mais estreita"
     $latin1.GetString($bytes)
 }
 
@@ -219,12 +229,22 @@ function Convert-FightMugen([string]$text) {
     $lines = $split.lines
     $face = $lifeCut - $motifCrop
     $n = 0
+    $fx = $null
     foreach ($s in Get-StageSections $lines) {
         $name = ($s.name -replace '\s+', ' ')
+        if ($name -eq "[fightfx]") {
+            $fx = Find-Key $lines $s "scale"
+            $old = if ($fx) { [double]::Parse($fx.value, $inv) } else { 1 }
+            $value = ($old * (Get-FxScale)).ToString($inv)
+            if ($fx) { $lines[$fx.i] = "scale = $value" } else { $lines[$s.from] += "$($split.seps[$s.from])scale = $value" }
+            $fx = $value
+            continue
+        }
         for ($i = $s.from + 1; $i -lt $s.to; $i++) {
             $code = ($lines[$i] -replace ';.*$', '').Trim()
             if ($code -notmatch '^(?i)(p(\d)\.(teammate\.)?pos|p(\d)\.range\.x|team(\d)\.pos|pos)\s*=') { continue }
             $player = if ($Matches[2]) { [int]$Matches[2] } elseif ($Matches[4]) { [int]$Matches[4] } elseif ($Matches[5]) { [int]$Matches[5] } else { 0 }
+            $teammate = [bool]$Matches[3]
             $left = $player % 2 -eq 1
             if ($code -match '^(?i)p\d\.range\.x') {
                 $lines[$i] = Add-ToValues $lines[$i] @(1) $(if ($left) { $lifeCut } else { -$lifeCut })
@@ -232,13 +252,16 @@ function Convert-FightMugen([string]$text) {
                 $lines[$i] = Add-ToValues $lines[$i] @(0) (-$motifCrop)
             } elseif ($name -match '(face|name)\]$' -or $name -eq "[combo]") {
                 $dx = if ($name -eq "[combo]") { 0 } else { $face }
+                if ($name -in "[simul face]", "[turns face]" -and -not $teammate) { $dx += $teamFaceShift }
+                if ($name -eq "[face]") { $dx += 3 * $frameCut[1] }
                 $lines[$i] = Add-ToValues $lines[$i] @(0) $(if ($left) { $dx } else { -2 * $motifCrop - $dx })
             } else { continue }
             $n++
         }
     }
     if ($n -lt 40) { throw "data/fight.def: poucos elementos de HUD encontrados ($n); arquivo diferente do esperado." }
-    Write-Host "  fight.def: HUD em 960x720 ($n posicoes, barras de vida $lifeCut unidades mais curtas)"
+    if ($null -eq $fx) { throw "data/fight.def: secao [FightFx] nao encontrada; arquivo diferente do esperado." }
+    Write-Host "  fight.def: HUD em 960x720 ($n posicoes, barras de vida $lifeCut unidades mais curtas, FightFx scale $fx)"
     Join-Lines $split
 }
 
