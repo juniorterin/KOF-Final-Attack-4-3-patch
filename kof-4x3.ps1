@@ -463,9 +463,10 @@ function Convert-NarrowStoryboard([string]$text) {
     Join-Lines $split
 }
 
-# Storyboards wider than 4:3 (e.g. 1080x720) were seen through the 16:9 frame (1280x720 around them). Ikemen
-# would crop them to 4:3; instead the 16:9 area becomes a 4:3 localcoord of the same width and every scene
-# moves by the margin around it (layer offsets are relative to layerall.pos).
+# Storyboards wider than 4:3 (e.g. 1080x720) were seen through the 16:9 frame (1280x720 around them), and their
+# text runs past the 1080 area. Both engines would show only that area on 4:3; instead the 16:9 area becomes a
+# 4:3 localcoord of the same width and every scene moves by the margin around it (layer offsets are relative to
+# layerall.pos).
 function Convert-Storyboard([string]$text) {
     $split = Split-Lines $text
     $lines = $split.lines
@@ -498,7 +499,53 @@ function Convert-Storyboard([string]$text) {
             }
         }
     }
+    if (-not $ikemen) { Add-StoryFrameFill $lines $split.seps $sections $newW $newH }
     Join-Lines $split
+}
+
+# The story scenes on a white clear colour are framed by sprite 5,0 (black bands around a transparent window,
+# 806 px tall), shorter than the 4:3 view: the white clear colour would show above and below it. Two background
+# copies of the frame, clipped by windows to those strips, extend its black bands to the screen edges.
+$storyFrame = @{ sprite = "5,0"; axisY = 607; height = 806; band = 140 }
+
+function Add-StoryFrameFill([string[]]$lines, [string[]]$seps, $sections, [int]$w, [int]$h) {
+    $frameActions = @()
+    foreach ($s in $sections | Where-Object { $_.name -match '^\[begin action\s+(\d+)\]$' }) {
+        $a = [int]($s.name -replace '[^\d]', '')
+        for ($i = $s.from + 1; $i -lt $s.to; $i++) {
+            $code = ($lines[$i] -replace ';.*$', '').Trim()
+            if (-not $code) { continue }
+            if ($code -match "^$([regex]::Escape($storyFrame.sprite) -replace ',', '\s*,\s*')\s*,") { $frameActions += $a }
+            break
+        }
+    }
+    $n = 0
+    foreach ($s in $sections | Where-Object { $_.name -match '^\[scene\s' }) {
+        $clear = Find-Key $lines $s "clearcolor"
+        if (-not $clear -or $clear.value -match '^0\s*,\s*0\s*,\s*0\b') { continue }
+        $all = Find-Key $lines $s "layerall\.pos"
+        if (-not $all) { continue }
+        $layer = $null
+        for ($i = $s.from + 1; $i -lt $s.to; $i++) {
+            if (($lines[$i] -replace ';.*$', '') -match '^\s*(?i)layer(\d+)\.anim\s*=\s*(\d+)' -and [int]$Matches[2] -in $frameActions) { $layer = $Matches[1]; break }
+        }
+        if ($null -eq $layer) { continue }
+        $off = Find-Key $lines $s "layer$layer\.offset"
+        $ax, $ay = ($all.value -split ',') | ForEach-Object { [double]::Parse($_.Trim(), $inv) }
+        $ox, $oy = if ($off) { ($off.value -split ',') | ForEach-Object { [double]::Parse(($_ -replace ';.*$', '').Trim(), $inv) } } else { 0, 0 }
+        $x = $ax + $ox - $w / 2; $y = $ay + $oy
+        $top = $y - $storyFrame.axisY; $bottom = $top + $storyFrame.height
+        if ($top -le 0 -and $bottom -ge $h) { continue }
+        if ($top -gt $storyFrame.band -or $h - $bottom -gt $storyFrame.band) { throw "Storyboard: moldura da cena menor que o esperado." }
+        $name = "Fill43s$n"
+        $nl = if ($seps[$s.from]) { $seps[$s.from] } else { "`r`n" }
+        $lines[$all.i] += "${nl}bg.name = $name"
+        $last = $lines.Length - 1
+        $lines[$last] += "$nl$nl[${name}Def]$nl$nl" +
+            "[$name top]${nl}type = normal${nl}spriteno = $($storyFrame.sprite)${nl}start = $x,$($y - $top)${nl}window = 0,0,$($w - 1),$($top + 2)$nl$nl" +
+            "[$name bottom]${nl}type = normal${nl}spriteno = $($storyFrame.sprite)${nl}start = $x,$($y + $h - $bottom)${nl}window = 0,$($bottom - 2),$($w - 1),$($h - 1)$nl"
+        $n++
+    }
 }
 
 # ---------------------------------------------------------------- common1.cns
@@ -804,7 +851,11 @@ function Invoke-Apply {
             "data\fight.def"   { if ($ikemen) { Convert-Fight $text $shift } else { Convert-FightMugen $text }; break }
             "data\fight.sff"   { Convert-FightSff $text; break }
             "data\common1.cns" { Convert-Common $text; break }
-            "data\*.def"       { if ($ikemen) { Convert-Storyboard $text } else { Convert-NarrowStoryboard $text }; break }
+            "data\*.def"       {
+                $board = if ($ikemen) { $null } else { Convert-NarrowStoryboard $text }
+                if ($null -eq $board) { $board = Convert-Storyboard $text }
+                $board; break
+            }
             "stages\*"         { Convert-Stage $text; break }
             "chars\*"          { Convert-CharFile $text; break }
         }

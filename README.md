@@ -44,6 +44,7 @@ O patch não altera o modo janela/tela cheia. No CRT, use `Alt+Enter` no jogo ou
 | `data/fight.sff` | Fundo das barras de vida (sprites 10,0 e 10,1) com 4 segmentos listrados a menos |
 | `data/common1.cns` | HUD de luta (pontuação, barras de power, estoques, ícones, banner VS, texto LEVEL) reposicionado para a tela 4:3; fundo do MODE SELECT estendido até a base |
 | `data/logo.def`, `data/credits.def` | Textos centralizados no 4:3 |
+| `data/story.def`, `data/ending.def` | Storyboards 1080x720 viram `localcoord = 1280,960` mostrando a moldura 16:9 inteira (o texto passa da área 1080 e seria cortado); nas cenas de fundo branco a faixa preta da moldura é estendida até as bordas |
 | `stages/*.def` | Zoom fixo de câmera 4:3 e ajuste de enquadramento |
 | `chars/*` (14 arquivos) | Efeitos de tela dos supers centralizados corretamente sob o zoom |
 
@@ -151,4 +152,4 @@ continuam no layout 16:9 centralizado (sem a grade compacta nem o HUD ampliado).
   `-GameDir` e reconhece pastas do Ikemen.
 - **1.2** — MUGEN: telas em 960x720 preenchendo o 4:3 (título, seleção com grade compacta e retrato maior),
   HUD de luta na proporção do original com barras de vida mais curtas, fundo do MODE SELECT até a base, texto
-  LEVEL no início da luta, tela de logo e créditos centralizadas.
+  LEVEL no início da luta, tela de logo e créditos centralizadas, texto da história e do final sem cortes.
