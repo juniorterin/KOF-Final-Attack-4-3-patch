@@ -68,14 +68,71 @@ transforma a imagem em um **recorte 4:3 fiel** do widescreen:
   (`[Video] Width/Height`), o que também deixa a imagem mais limpa em 320x240.
 - **Menus** (título, seleção) continuam com o layout original, centralizados (letterbox).
 
+## Versão Ikemen GO
+
+`kof-ikemen.ps1` cria uma **cópia do jogo rodando no [Ikemen GO](https://github.com/ikemen-engine/Ikemen-GO)
+v1.0.0** já em 4:3, para Windows e Linux (por exemplo, um gabinete com CRT). A pasta original do jogo não é
+alterada.
+
+1. Com a pasta `Patch 4x3` dentro da pasta do jogo, execute **`Converter para Ikemen.bat`**.
+2. O script baixa o Ikemen GO do GitHub (Windows e Linux, ~150 MB, conferidos por SHA256) para
+   `Patch 4x3/downloads/`, copia personagens, cenários, telas, fontes e sons (~2,1 GB) e aplica o patch 4:3.
+3. O resultado fica em `KOF Final Attack Ikemen`, ao lado da pasta do jogo.
+
+Se o patch 4:3 do MUGEN estiver aplicado no jogo, a cópia parte dos arquivos originais do backup.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File kof-ikemen.ps1 [-Out pasta] [-Width 320] [-Platform both|windows|linux] [-Windowed] [-Widescreen]
+```
+
+| Opção | Efeito |
+|---|---|
+| `-Out` | Pasta de destino (precisa estar vazia ou não existir) |
+| `-Width` | Largura da saída 4:3 (padrão 320, ou seja 320x240) |
+| `-Platform` | `both` (padrão) inclui os executáveis de Windows e Linux; `windows` ou `linux` só um deles |
+| `-Windowed` | Começa em janela (o padrão é tela cheia, como no gabinete) |
+| `-Widescreen` | Converte para o Ikemen sem aplicar o 4:3 |
+
+Para rodar: `Ikemen_GO.exe` no Windows; no Linux, `chmod +x Ikemen_GO_Linux` e `./Ikemen_GO_Linux` a partir da
+pasta do jogo. No FliperOS o teste foi feito com o mesmo Switchres (320x240@60) que o `fliperos-x11-run` usa;
+de um terminal (TTY), `cd` para a pasta e `fliperos-x11-run ./Ikemen_GO_Linux` deve abrir o jogo do mesmo
+jeito (esse atalho em si não foi testado).
+
+O 4:3 da pasta Ikemen também pode ser desfeito e refeito com o mesmo `kof-4x3.ps1`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File kof-4x3.ps1 -Action restore -GameDir "..\..\KOF Final Attack Ikemen"
+powershell -ExecutionPolicy Bypass -File kof-4x3.ps1 -Action apply -GameDir "..\..\KOF Final Attack Ikemen"
+```
+
+Nesse caso o backup fica em `backup-widescreen/` dentro da pasta Ikemen.
+
+### Diferenças em relação ao MUGEN
+
+O zoom dos cenários e o reposicionamento do HUD são os mesmos. O que muda:
+
+| Arquivo | Alteração no Ikemen |
+|---|---|
+| `save/config.ini` | `GameWidth/GameHeight` = renderização (960x720), `WindowWidth/WindowHeight` = saída (320x240), `FightAspect` = resolução (4:3). Na restauração só essas chaves voltam |
+| `data/common1.cns`, `chars/*` | Explods ancorados na tela usam `screenwidth/screenheight`, gatilhos do Ikemen que dão o tamanho da tela sem zoom (no Ikemen `gamewidth/gameheight` não seguem a regra do MUGEN) |
+| `data/fight.def` | Recebe `[Info] localcoord = 1280,720`, que antes vinha implícito do `system.def` |
+| `data/system.def` | O Ikemen corta as laterais de um motif 16:9 numa tela 4:3, e o MUGEN 1.1 encaixa a largura. O patch declara `localcoord = 1280,960` e desce as posições absolutas (menu do título, seleção, VS, continue, vitória, fundos) em 120 unidades, centralizando como no MUGEN |
+| `data/story.def`, `data/ending.def` | Storyboards 1080x720 eram vistos pela moldura 16:9 (o texto começa fora da área 1080). Viram `localcoord = 1280,960` com as cenas deslocadas, mostrando a mesma área do widescreen |
+| `data/common1.cns.zss` | Removido da cópia: o Ikemen daria preferência a ele, e o HUD do jogo está no `common1.cns` |
+
 ## Observações
 
 - Em 4:3 a tela mostra menos largura de arena; os personagens podem ficar no máximo cerca de 25% mais próximos
   do que no widescreen, como nos KOF clássicos.
 - O cenário `kof94blacknoah2` não carrega nem na versão original do jogo (problema pré-existente).
 - Testado em janela; em tela cheia o modo 320x240 depende do suporte do driver/monitor.
+- Ikemen GO testado no Windows (janela) e num gabinete FliperOS (Ubuntu 24.04, Radeon R7 240, CRT 15 kHz) a
+  320x240@60 via Switchres: abertura, título, seleção, storyboard do arcade, VS, anúncios, luta e HUD. A
+  primeira execução no Linux é lenta enquanto os 2 GB do jogo entram no cache do disco.
 
 ## Histórico
 
 - **1.0** — Primeira versão: zoom de câmera 4:3 nos cenários, HUD, anúncios e efeitos de super ajustados,
   saída padrão 320x240 para CRT com renderização interna em 960x720, backup e restauração.
+- **1.1** — Conversão para Ikemen GO v1.0.0 (`kof-ikemen.ps1`) em 4:3, Windows e Linux; `kof-4x3.ps1` aceita
+  `-GameDir` e reconhece pastas do Ikemen.

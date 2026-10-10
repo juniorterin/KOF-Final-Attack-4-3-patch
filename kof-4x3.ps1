@@ -1,28 +1,33 @@
 # KOF Final Attack - patch 4:3
-# Uso: kof-4x3.ps1 -Action apply|restore|status [-Width 320]   (padrao 320x240, monitor CRT)
+# Uso: kof-4x3.ps1 -Action apply|restore|status [-Width 320] [-GameDir pasta]   (padrao 320x240, monitor CRT)
+# -GameDir aceita a pasta do jogo (MUGEN) ou uma pasta convertida para Ikemen GO (ver kof-ikemen.ps1).
 param(
     [ValidateSet("apply", "restore", "status")]
     [string]$Action = "status",
-    [int]$Width = 320
+    [int]$Width = 320,
+    [string]$GameDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 $latin1 = [Text.Encoding]::GetEncoding(28591)
 
 $patchDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Split-Path -Parent $patchDir
-if (-not (Test-Path -LiteralPath (Join-Path $root "Final Attack.exe"))) {
+$root = if ($GameDir) { (Resolve-Path -LiteralPath $GameDir).Path.TrimEnd('\') } else { Split-Path -Parent $patchDir }
+$ikemen = (Test-Path -LiteralPath (Join-Path $root "Ikemen_GO.exe")) -or (Test-Path -LiteralPath (Join-Path $root "Ikemen_GO_Linux"))
+if (-not $ikemen -and -not (Test-Path -LiteralPath (Join-Path $root "Final Attack.exe"))) {
     throw "Nao encontrei 'Final Attack.exe'. Coloque a pasta 'Patch 4x3' dentro da pasta do jogo."
 }
-$backupDir = Join-Path $patchDir "backup-widescreen"
+$backupDir = if ($GameDir) { Join-Path $root "backup-widescreen" } else { Join-Path $patchDir "backup-widescreen" }
 $stateFile = Join-Path $backupDir "estado.txt"
 
 # MUGEN 1.1 always lays out the fight as if the screen were 16:9. A constant camera zoom of (16/9)/(4/3)
 # turns that into a true 4:3 crop: stage and characters keep their proportions and their vertical framing.
+# Ikemen GO (FightAspect = resolution) frames the fight the same way, so the same zoom applies.
 $zoom = "1.333333"
 # Under zoom, gamewidth/gameheight shrink by the zoom factor while screen-anchored explods are not zoomed.
-$screenWidth = "(gamewidth*4/3)"
-$screenHeight = "(gameheight*4/3)"
+# Ikemen computes them differently but has screenwidth/screenheight, the unzoomed screen size.
+$screenWidth = if ($ikemen) { "screenwidth" } else { "(gamewidth*4/3)" }
+$screenHeight = if ($ikemen) { "screenheight" } else { "(gameheight*4/3)" }
 # Extra height of a 4:3 screen, measured in the units of screen-anchored explods (16:9 frame = width*9/16).
 $hudBottomShift = "($screenHeight - $screenWidth*9/16)"
 
@@ -31,8 +36,9 @@ function Write-Text([string]$path, [string]$text) { [IO.File]::WriteAllText($pat
 function Rel([string]$path) { $path.Substring($root.Length + 1) }
 
 function Assert-GameClosed {
+    $exe = [IO.Path]::GetFullPath((Join-Path $root $(if ($ikemen) { "Ikemen_GO.exe" } else { "Final Attack.exe" })))
     $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-        try { $_.Path -and ([IO.Path]::GetFullPath($_.Path) -eq [IO.Path]::GetFullPath((Join-Path $root "Final Attack.exe"))) } catch { $false }
+        try { $_.Path -and ([IO.Path]::GetFullPath($_.Path) -eq $exe) } catch { $false }
     }
     if ($running) { throw "Feche o jogo antes de aplicar ou restaurar o patch." }
 }
@@ -76,13 +82,124 @@ function Get-ConfigSize([string]$text) {
     @([int]$w[$w.Count - 1].Groups[1].Value, [int]$h[$h.Count - 1].Groups[1].Value)
 }
 
+# ---------------------------------------------------------------- save/config.ini (Ikemen)
+$ikemenVideoKeys = @("GameWidth", "GameHeight", "WindowWidth", "WindowHeight", "FightAspectWidth", "FightAspectHeight")
+
+function Get-IkemenVideo([string]$text) {
+    $values = [ordered]@{}
+    foreach ($key in $ikemenVideoKeys) {
+        $m = [regex]::Match($text, "(?m)^[ \t]*$key[ \t]*=[ \t]*(-?\d+)")
+        if (-not $m.Success) { throw "save/config.ini: $key nao encontrado." }
+        $values[$key] = [int]$m.Groups[1].Value
+    }
+    $values
+}
+
+function Set-IkemenVideo([string]$text, $values) {
+    foreach ($key in $values.Keys) {
+        $text = [regex]::Replace($text, "(?m)^([ \t]*$key[ \t]*=[ \t]*)-?\d+", '${1}' + $values[$key])
+    }
+    $text
+}
+
 # ---------------------------------------------------------------- fight.def
 # Round/Fight/KO announcements are positioned from the [Round] "pos"; push them to the 4:3 centre.
 function Convert-Fight([string]$text, [int]$shift) {
     $m = [regex]::Match($text, '(?ims)^\[Round\][^\[]*?^([ \t]*pos[ \t]*=[ \t]*)(-?[\d.]+)[ \t]*,[ \t]*(-?[\d.]+)')
     if (-not $m.Success) { throw "data/fight.def: [Round] pos nao encontrado." }
     $y = [double]$m.Groups[3].Value + $shift
-    $text.Substring(0, $m.Groups[1].Index) + $m.Groups[1].Value + $m.Groups[2].Value + "," + $y + $text.Substring($m.Groups[3].Index + $m.Groups[3].Length)
+    $text = $text.Substring(0, $m.Groups[1].Index) + $m.Groups[1].Value + $m.Groups[2].Value + "," + $y + $text.Substring($m.Groups[3].Index + $m.Groups[3].Length)
+    # Without [Info] localcoord Ikemen falls back to the motif localcoord, which the motif conversion changes.
+    if ($ikemen -and $text -notmatch '(?im)^[ \t]*\[Info\]') {
+        $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+        $text = "[Info]${nl}localcoord = $($motifSize[0]),$($motifSize[1])${nl}${nl}" + $text
+    }
+    $text
+}
+
+# ---------------------------------------------------------------- system.def (Ikemen)
+# MUGEN 1.1 fits a 16:9 motif to the width of a 4:3 screen and centres it vertically; Ikemen crops its sides
+# instead. A 4:3 localcoord of the same width makes Ikemen fit the width; absolute positions then move down
+# by $shift to stay centred (positions relative to another element are left alone).
+$motifAbsolute = @{
+    "[title info]"               = @("menu.pos")
+    "[select info]"              = @("pos", "title.offset", "p1.face.offset", "p2.face.offset", "p1.name.offset", "p2.name.offset",
+                                     "stage.pos", "p1.teammenu.pos", "p2.teammenu.pos")
+    "[vs screen]"                = @("p1.pos", "p2.pos", "p1.name.pos", "p2.name.pos", "match.offset")
+    "[continue screen]"          = @("pos")
+    "[win screen]"               = @("wintext.offset")
+    "[survival results screen]"  = @("winstext.offset")
+    "[victory screen]"           = @("p1.offset", "p2.offset", "p1.name.offset", "p2.name.offset", "winquote.offset")
+}
+$motifWindows = @("p1.window", "p2.window", "winquote.window", "window", "maskwindow")
+
+function Convert-Motif([string]$text, [int]$shift) {
+    $split = Split-Lines $text
+    $lines = $split.lines
+    $n = 0
+    foreach ($s in Get-StageSections $lines) {
+        $name = ($s.name -replace '\s+', ' ')
+        if ($name -eq "[info]") {
+            $lc = Find-Key $lines $s "localcoord"
+            if ($lc) { $lines[$lc.i] = "localcoord = $($motifSize[0]),$($motifSize[0] * 3 / 4)" }
+            continue
+        }
+        $keys = $motifAbsolute[$name]
+        $isBg = $name -match '^\[\s*\w*bg\s' -and $name -notmatch 'bgdef'
+        if ($isBg) {
+            $link = Find-Key $lines $s "positionlink"
+            if ($link -and $link.value -match '^1') { continue }
+            $keys = @("start")
+        }
+        foreach ($key in @($keys)) {
+            if (-not $key) { continue }
+            $k = Find-Key $lines $s ([regex]::Escape($key)); if ($k) { $lines[$k.i] = Add-ToValues $lines[$k.i] @(1) $shift; $n++ }
+        }
+        foreach ($key in $motifWindows) {
+            $w = Find-Key $lines $s ([regex]::Escape($key)); if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(1, 3) $shift; $n++ }
+        }
+    }
+    if ($n -lt 10) { throw "data/system.def: poucos elementos de tela encontrados ($n); arquivo diferente do esperado." }
+    Write-Host "  system.def: telas ajustadas para 4:3 ($n posicoes centralizadas)"
+    Join-Lines $split
+}
+
+# Storyboards wider than 4:3 (e.g. 1080x720) were seen through the 16:9 frame (1280x720 around them). Ikemen
+# would crop them to 4:3; instead the 16:9 area becomes a 4:3 localcoord of the same width and every scene
+# moves by the margin around it (layer offsets are relative to layerall.pos).
+function Convert-Storyboard([string]$text) {
+    $split = Split-Lines $text
+    $lines = $split.lines
+    $sections = @(Get-StageSections $lines)
+    $info = $sections | Where-Object { $_.name -eq "[info]" } | Select-Object -First 1
+    if (-not $info) { return $null }
+    $lc = Find-Key $lines $info "localcoord"
+    if (-not $lc) { return $null }
+    $w, $h = $lc.value -split '\s*,\s*' | ForEach-Object { [int]($_ -replace '[^\d]', '') }
+    if ($w * 3 -le $h * 4) { return $null }
+    $newW = [int][math]::Round($h * 16 / 9)
+    $newH = $newW * 3 / 4
+    $dx = ($newW - $w) / 2; $dy = ($newH - $h) / 2
+    $lines[$lc.i] = "localcoord = $newW,$newH"
+    foreach ($s in $sections) {
+        if ($s.name -match '^\[scene\s') {
+            $p = Find-Key $lines $s "layerall\.pos"
+            if ($p) {
+                $lines[$p.i] = Add-ToValues (Add-ToValues $lines[$p.i] @(0) $dx) @(1) $dy
+            } else {
+                $nl = if ($split.seps[$s.from]) { $split.seps[$s.from] } else { "`r`n" }
+                $lines[$s.from] += "${nl}layerall.pos = $dx,$dy"
+            }
+        } elseif ($s.name -match '^\[\s*\w*bg\s' -and $s.name -notmatch 'bgdef') {
+            $link = Find-Key $lines $s "positionlink"
+            if ($link -and $link.value -match '^1') { continue }
+            $st = Find-Key $lines $s "start"; if ($st) { $lines[$st.i] = Add-ToValues (Add-ToValues $lines[$st.i] @(0) $dx) @(1) $dy }
+            foreach ($key in "window", "maskwindow") {
+                $win = Find-Key $lines $s $key; if ($win) { $lines[$win.i] = Add-ToValues (Add-ToValues $lines[$win.i] @(0, 2) $dx) @(1, 3) $dy }
+            }
+        }
+    }
+    Join-Lines $split
 }
 
 # ---------------------------------------------------------------- common1.cns
@@ -279,10 +396,14 @@ function Convert-Stage([string]$text) {
 # ---------------------------------------------------------------- actions
 function Get-Targets {
     $list = @(
-        (Join-Path $root "data\mugen.cfg"),
+        (Join-Path $root $(if ($ikemen) { "data\system.def" } else { "data\mugen.cfg" })),
         (Join-Path $root "data\fight.def"),
         (Join-Path $root "data\common1.cns")
     )
+    if ($ikemen) {
+        $list += Get-ChildItem -LiteralPath (Join-Path $root "data") -Filter *.def |
+            Select-String -Pattern '^\s*\[SceneDef\]' -List | ForEach-Object { $_.Path }
+    }
     $list += Get-ChildItem -LiteralPath (Join-Path $root "stages") -Filter *.def | ForEach-Object { $_.FullName }
     $list += Get-ChildItem -LiteralPath (Join-Path $root "chars") -Recurse -File -Include *.cns, *.st, *.txt |
         Select-String -Pattern 'game(width|height)' -List | ForEach-Object { $_.Path }
@@ -292,8 +413,9 @@ function Get-Targets {
 function Get-MotifShift {
     $sys = Read-Text (Join-Path $root "data\system.def")
     $m = [regex]::Match($sys, '(?im)^[ \t]*localcoord[ \t]*=[ \t]*(\d+)[ \t]*,[ \t]*(\d+)')
-    if (-not $m.Success) { return 0 }
+    if (-not $m.Success) { $script:motifSize = @(320, 240); return 0 }
     $w = [int]$m.Groups[1].Value; $h = [int]$m.Groups[2].Value
+    $script:motifSize = @($w, $h)
     [int](($w * 3 / 4 - $h) / 2)
 }
 
@@ -306,20 +428,35 @@ function Invoke-Apply {
     $renderW = [math]::Max($Width, 960)
     $renderH = $renderW * 3 / 4
 
-    $cfgPath = Join-Path $root "data\mugen.cfg"
-    $origSize = Get-ConfigSize (Read-Text $cfgPath)
+    if ($ikemen) {
+        $cfgPath = Join-Path $root "save\config.ini"
+        if (-not (Test-Path -LiteralPath $cfgPath)) { throw "save/config.ini nao encontrado; rode o Ikemen GO uma vez ou use kof-ikemen.ps1." }
+        $origIkemen = Get-IkemenVideo (Read-Text $cfgPath)
+        $origSize = @($origIkemen["GameWidth"], $origIkemen["GameHeight"])
+    } else {
+        $cfgPath = Join-Path $root "data\mugen.cfg"
+        $origSize = Get-ConfigSize (Read-Text $cfgPath)
+    }
     $shift = Get-MotifShift
 
     $changes = @{}
+    if ($ikemen) {
+        $changes[$cfgPath] = Set-IkemenVideo (Read-Text $cfgPath) @{
+            GameWidth = $renderW; GameHeight = $renderH; WindowWidth = $Width; WindowHeight = $height
+            FightAspectWidth = 0; FightAspectHeight = 0
+        }
+    }
     foreach ($path in Get-Targets) {
         $text = Read-Text $path
         $rel = Rel $path
         $new = switch -Wildcard ($rel) {
-            "data\mugen.cfg"   { Set-VideoMode (Convert-Config $text $renderW $renderH) $Width $height }
-            "data\fight.def"   { Convert-Fight $text $shift }
-            "data\common1.cns" { Convert-Common $text }
-            "stages\*"         { Convert-Stage $text }
-            "chars\*"          { Convert-CharFile $text }
+            "data\mugen.cfg"   { Set-VideoMode (Convert-Config $text $renderW $renderH) $Width $height; break }
+            "data\system.def"  { Convert-Motif $text $shift; break }
+            "data\fight.def"   { Convert-Fight $text $shift; break }
+            "data\common1.cns" { Convert-Common $text; break }
+            "data\*.def"       { Convert-Storyboard $text; break }
+            "stages\*"         { Convert-Stage $text; break }
+            "chars\*"          { Convert-CharFile $text; break }
         }
         if ($new -and $new -ne $text) { $changes[$path] = $new }
     }
@@ -337,6 +474,7 @@ function Invoke-Apply {
             $written += $path
         }
         $state = @("resolucao_original=$($origSize[0])x$($origSize[1])") + ($changes.Keys | ForEach-Object { "arquivo=" + (Rel $_) })
+        if ($ikemen) { $state += $origIkemen.Keys | ForEach-Object { "ikemen_$_=$($origIkemen[$_])" } }
         [IO.File]::WriteAllLines($stateFile, $state)
     } catch {
         foreach ($path in $written) { Copy-Item -LiteralPath (Join-Path $backupDir (Rel $path)) -Destination $path -Force }
@@ -350,6 +488,11 @@ function Invoke-Apply {
     Write-Host "  Cenarios ajustados (zoom 4:3): $stages"
     Write-Host "  Arquivos de personagens com efeitos de tela ajustados: $chars"
     Write-Host "  HUD de luta e anuncios reposicionados (fight.def, common1.cns)"
+    if ($ikemen) {
+        $boards = @($changes.Keys | Where-Object { (Rel $_) -like "data\*.def" -and (Rel $_) -notin @("data\system.def", "data\fight.def") }).Count
+        Write-Host "  Storyboards widescreen ajustados: $boards"
+        Write-Host "  Ikemen GO: save\config.ini com FightAspect da resolucao (4:3)"
+    }
     Write-Host "  Backup dos originais: $(Rel $backupDir)"
 }
 
@@ -364,6 +507,10 @@ function Invoke-Restore {
         if ($rel -eq "data\mugen.cfg") {
             # Only the resolution is reverted so options saved by the game meanwhile are kept.
             Write-Text $path (Reset-VideoMode (Convert-Config (Read-Text $path) ([int]$ow) ([int]$oh)))
+        } elseif ($rel -eq "save\config.ini") {
+            $values = @{}
+            foreach ($v in $state | Where-Object { $_ -like "ikemen_*=*" }) { $kv = $v.Substring(7) -split '=', 2; $values[$kv[0]] = $kv[1] }
+            Write-Text $path (Set-IkemenVideo (Read-Text $path) $values)
         } else {
             Copy-Item -LiteralPath (Join-Path $backupDir $rel) -Destination $path -Force
         }
