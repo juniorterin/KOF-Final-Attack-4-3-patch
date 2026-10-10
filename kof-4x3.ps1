@@ -850,6 +850,23 @@ function Convert-Common([string]$text) {
         $level = 'pos = (screenwidth*.5),(screenheight)'
         if (([regex]::Matches($text, [regex]::Escape($level))).Count -ne 2) { throw "data/common1.cns: posicao do LEVEL nao encontrada." }
         $text = $text.Replace($level, "pos = (screenwidth*.5),(screenheight - $levelLift)")
+
+        # WINNER graphics are drawn at scale 1 in the 960 localcoord, so a 45 px word is 15 px on screen.
+        $winner = [regex]::Replace($text, '(anim = Fifelse\(\(teamside = 2\),80(?:21,8020|23,8024)\)\r?\npostype = left\r?\npos = 160, 60\r?\n)scale = 1,1', '${1}scale = 2,2')
+        if ($winner -eq $text) { throw "data/common1.cns: anuncio de vencedor nao encontrado." }
+        $text = $winner
+
+        # The 1994 USA referee is bound to the bottom of the screen for one tick, which on 4:3 is below the
+        # floor (on the logo). Leave him at y = -10, just above the floor, and draw every FightFx pose 1:1.
+        # The stand poses are f1583/f1587; the walk poses are f1584-f1589. Scaling only the stand ones makes
+        # him change size when he moves.
+        $eol = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+        $doll = [regex]::Replace($text, '(?m)^trigger1 = time = 1(\r?\ntime = 1\r?\nfacing = 0\r?\npos = 0,-30)\r?$', 'trigger1 = 0${1}')
+        if ($doll -eq $text) { throw "data/common1.cns: juiz do 1994 EUA nao encontrado." }
+        $text = $doll
+        $dollScale = [regex]::Replace($text, '(?m)^(anim = f158[3-9])\r?$', ('${1}' + $eol + "scale = $hudScale,$hudScale"))
+        if (([regex]::Matches($dollScale, "(?m)^anim = f158[3-9]\r?\nscale = $hudScale,$hudScale")).Count -ne 13) { throw "data/common1.cns: animacoes do juiz do 1994 EUA nao encontradas." }
+        $text = $dollScale
     }
 
     $powerY = 'fvar(39):= 197.5'
