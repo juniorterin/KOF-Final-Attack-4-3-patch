@@ -466,7 +466,8 @@ function Convert-SelectGrid([string]$text) {
 }
 
 # Storyboards in a 370x280 localcoord centre their text on x = 170, which MUGEN shows at the centre of a 16:9 screen;
-# on 4:3 the centre is x = 185.
+# on 4:3 the centre is x = 185. Ikemen would scale the 370x280 area down to the screen (320/370: columns and rows
+# dropped at 320x240), so there the centre 320x240 is shown 1:1 instead.
 function Convert-NarrowStoryboard([string]$text) {
     $split = Split-Lines $text
     $lines = $split.lines
@@ -475,15 +476,32 @@ function Convert-NarrowStoryboard([string]$text) {
     if (-not $info) { return $null }
     $lc = Find-Key $lines $info "localcoord"
     if (-not $lc -or $lc.value -notmatch '^370\s*,\s*280\b') { return $null }
+    $dx = 15; $dy = 0
+    if ($ikemen) {
+        $lines[$lc.i] = "localcoord = 320, 240 ;4x3 " + $lines[$lc.i].Trim()
+        $dx -= (370 - 320) / 2; $dy -= (280 - 240) / 2
+    }
     foreach ($s in $sections | Where-Object { $_.name -match '^\[scene\s' }) {
         $p = Find-Key $lines $s "layerall\.pos"
-        if ($p) { $lines[$p.i] = Add-ToValues $lines[$p.i] @(0) 15 }
+        if ($p) {
+            $lines[$p.i] = Add-ToValues $lines[$p.i] @(0) $dx
+            if ($dy) { $lines[$p.i] = Add-ToValues $lines[$p.i] @(1) $dy }
+        }
         else {
             $nl = if ($split.seps[$s.from]) { $split.seps[$s.from] } else { "`r`n" }
-            $lines[$s.from] += "${nl}layerall.pos = 15,0"
+            $lines[$s.from] += "${nl}layerall.pos = $dx,$dy"
         }
     }
     Join-Lines $split
+}
+
+# Ikemen gives storyboards without a localcoord the motif localcoord; MUGEN gives them 320x240, which is what they
+# are laid out for (e.g. the intro).
+function Add-StoryboardLocalcoord([string]$text) {
+    if ($text -match '(?im)^[ \t]*localcoord[ \t]*=') { return $null }
+    $m = [regex]::Match($text, '(?im)^[ \t]*\[SceneDef\][^\r\n]*(\r?\n)')
+    if (-not $m.Success) { return $null }
+    $text.Insert($m.Index + $m.Length, "localcoord = 320,240" + $m.Groups[1].Value)
 }
 
 # Storyboards wider than 4:3 (e.g. 1080x720) were seen through the 16:9 frame (1280x720 around them), and their
@@ -515,14 +533,14 @@ function Convert-Storyboard([string]$text) {
             }
         } elseif ($s.name -match '^\[\s*\w*bg\s' -and $s.name -notmatch 'bgdef') {
             $link = Find-Key $lines $s "positionlink"
-            if ($link -and $link.value -match '^1') { continue }
+            if ($link -and $link.value -match '^[-+]?0*[1-9]') { continue }
             $st = Find-Key $lines $s "start"; if ($st) { $lines[$st.i] = Add-ToValues (Add-ToValues $lines[$st.i] @(0) $dx) @(1) $dy }
             foreach ($key in "window", "maskwindow") {
                 $win = Find-Key $lines $s $key; if ($win) { $lines[$win.i] = Add-ToValues (Add-ToValues $lines[$win.i] @(0, 2) $dx) @(1, 3) $dy }
             }
         }
     }
-    if (-not $ikemen) { Add-StoryFrameFill $lines $split.seps $sections $newW $newH }
+    Add-StoryFrameFill $lines $split.seps $sections $newW $newH
     Join-Lines $split
 }
 
@@ -819,7 +837,8 @@ function Get-Targets {
         (Join-Path $root "data\fight.def"),
         (Join-Path $root "data\common1.cns")
     )
-    if (-not $ikemen) { $list += (Join-Path $root "data\mugen.cfg"), (Join-Path $root "data\select.def"), (Join-Path $root "data\fight.sff") }
+    $list += (Join-Path $root "data\select.def"), (Join-Path $root "data\fight.sff")
+    if (-not $ikemen) { $list += (Join-Path $root "data\mugen.cfg") }
     $list += Get-ChildItem -LiteralPath (Join-Path $root "data") -Filter *.def |
         Select-String -Pattern '^\s*\[SceneDef\]' -List | ForEach-Object { $_.Path }
     $list += Get-ChildItem -LiteralPath (Join-Path $root "stages") -Filter *.def | ForEach-Object { $_.FullName }
@@ -842,8 +861,9 @@ function Invoke-Apply {
     if ($Width % 4 -ne 0) { throw "A largura precisa ser multipla de 4 (ex.: 640, 800, 960, 1024, 1280)." }
     $height = $Width * 3 / 4
     # MUGEN 1.1 misplaces 4:3 storyboards (logo/intro) when rendering below ~960 px wide, so small video
-    # modes are rendered at 960x720 and scaled down by the engine.
-    $renderW = [math]::Max($Width, 960)
+    # modes are rendered at 960x720 and scaled down by the engine. Ikemen renders the video mode directly, which keeps
+    # sprites sharp instead of filtering a 960x720 frame down.
+    $renderW = if ($ikemen) { $Width } else { [math]::Max($Width, 960) }
     $renderH = $renderW * 3 / 4
 
     if ($ikemen) {
@@ -869,17 +889,18 @@ function Invoke-Apply {
         $rel = Rel $path
         $new = switch -Wildcard ($rel) {
             "data\mugen.cfg"   { Set-VideoMode (Convert-Config $text $renderW $renderH) $Width $height; break }
-            "data\system.def"  { if ($ikemen) { Convert-Motif $text $shift } else { Convert-MotifMugen $text }; break }
+            "data\system.def"  { Convert-MotifMugen $text; break }
             "data\select.def"  { Convert-SelectGrid $text; break }
-            "data\fight.def"   { if ($ikemen) { Convert-Fight $text $shift } else { Convert-FightMugen $text }; break }
+            "data\fight.def"   { Convert-FightMugen $text; break }
             "data\fight.sff"   { Convert-FightSff $text; break }
             "data\common1.cns" { Convert-Common $text; break }
             "data\*.def"       {
-                $board = if ($ikemen) { $null } else { Convert-NarrowStoryboard $text }
+                $board = if ($ikemen) { Add-StoryboardLocalcoord $text }
+                if ($null -eq $board) { $board = Convert-NarrowStoryboard $text }
                 if ($null -eq $board) { $board = Convert-Storyboard $text }
                 $board; break
             }
-            "stages\*"         { Convert-Stage $text; break }
+            "stages\*"         { Convert-Stage $text ([IO.Path]::GetFileNameWithoutExtension($rel)); break }
             "chars\*"          { Convert-CharFile $text; break }
         }
         if ($new -and $new -ne $text) { $changes[$path] = $new }
