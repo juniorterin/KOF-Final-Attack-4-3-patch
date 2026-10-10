@@ -351,9 +351,21 @@ $gridLastColumn = 33
 $gridBlockActions = @{ 30 = 0; 31 = 0; 32 = 1; 33 = 1; 34 = 3; 35 = 3; 36 = 4; 37 = 4; 39 = 2; 40 = 1; 41 = 3 }
 $gridWideActions = @(2, 4, 7, 8)
 $selectFaceScale = "0.8,0.8"
-function Get-GridShift([int]$k) { -96 - 32 * $k }
-# New column of an old visible column (5 per old column, minus the 4 dropped from each gap before it).
-function Get-GridColumn([int]$col) { $gridSplit * $col - ($gridSplit - 1) * @($gridGaps | Where-Object { $_ -lt $col }).Count }
+# Columns each gap between blocks keeps. Ikemen at 320x240 shows the screen edges on the CRT: there the gap columns go
+# away and each block is pushed right by a 6-unit (2 px) cell offset per gap instead, which leaves an 8-unit margin on
+# each side, and the grid moves 18 units down.
+$gridGapKeep = if ($ikemen) { 0 } else { 1 }
+$gridGapOffset = if ($ikemen) { 6 } else { 0 }
+$gridTop = if ($ikemen) { 18 } else { 0 }
+function Get-GridShift([int]$k) {
+    $gap = $gridGapKeep * 40 / $gridSplit + $gridGapOffset
+    $left = (960 - 920 - 4 * $gap) / 2 - 100
+    $left - (40 - $gap) * $k
+}
+# New column of an old visible column (5 per old column, minus the columns dropped from each gap before it).
+function Get-GridColumn([int]$col) {
+    $gridSplit * $col - ($gridSplit - $gridGapKeep) * @($gridGaps | Where-Object { $_ -lt $col }).Count
+}
 
 $motifMugenX = @{
     "[title info]"      = @{ "menu.pos" = -160 }
@@ -389,8 +401,16 @@ function Convert-MotifMugen([string]$text) {
             if (-not $cols -or [int]$cols.value -ne $gridColumns -or -not $spacing -or [int]($spacing.value -replace '\s*;.*$', '') -ne 40 -or
                 -not $size -or $size.value -notmatch '^0\s*,\s*25\b') { throw "data/system.def: grade de selecao diferente do esperado." }
             $lines[$cols.i] = "columns = $($gridColumns * $gridSplit)"
+            if ($gridTop) { $p = Find-Key $lines $s "pos"; if ($p) { $lines[$p.i] = Add-ToValues $lines[$p.i] @(1) $gridTop } }
             $lines[$spacing.i] = "cell.spacing = $(40 / $gridSplit)"
             $lines[$size.i] = "cell.size = 0,$(65 - 40 / $gridSplit)"
+            if ($gridGapOffset) {
+                $starts = @($gridGaps | ForEach-Object { Get-GridColumn $_ })
+                $nl = if ($seps[$size.i]) { $seps[$size.i] } else { "`r`n" }
+                for ($c = $starts[0]; $c -lt $gridColumns * $gridSplit; $c++) {
+                    $lines[$size.i] += "${nl}cell.$c-*.offset = $($gridGapOffset * @($starts | Where-Object { $_ -le $c }).Count),0"
+                }
+            }
             foreach ($p in "p1", "p2") {
                 $c = Find-Key $lines $s "$p\.cursor\.startcell"
                 if ($c) {
@@ -416,6 +436,9 @@ function Convert-MotifMugen([string]$text) {
         $action = Find-Key $lines $s "actionno"
         if (-not $action) { continue }
         $a = [int]($action.value -replace '[^\d].*$', '')
+        if ($gridTop -and ($gridBlockActions.ContainsKey($a) -or $a -in $gridWideActions)) {
+            $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $gridTop
+        }
         if ($gridBlockActions.ContainsKey($a)) {
             $lines[$st.i] = Add-ToValues $lines[$st.i] @(0) ((Get-GridShift $gridBlockActions[$a]) + $motifCrop)
             $blocks++
@@ -462,12 +485,13 @@ function Convert-SelectGrid([string]$text) {
         foreach ($c in $gridGaps) {
             $i = $entries[$base + $c]
             if (($lines[$i] -replace ';.*$', '').Trim() -ne "blank") { throw "data/select.def: espaco entre blocos nao encontrado (linha $($row), coluna $c)." }
-            $extra[$i] = 0
+            $extra[$i] = $gridGapKeep - 1
         }
-        $extra[$entries[$base + $gridLastColumn]] = ($gridSplit - 1) * ($gridGaps.Count + 1)
+        $extra[$entries[$base + $gridLastColumn]] = ($gridSplit - 1) + ($gridSplit - $gridGapKeep) * $gridGaps.Count
     }
     foreach ($i in $entries) {
         $blanks = if ($extra.ContainsKey($i)) { $extra[$i] } else { $gridSplit - 1 }
+        if ($blanks -lt 0) { $lines[$i] = ""; $split.seps[$i] = ""; continue }
         $nl = if ($split.seps[$i]) { $split.seps[$i] } else { "`r`n" }
         $lines[$i] += ("${nl}blank" * $blanks)
     }
