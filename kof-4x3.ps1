@@ -262,9 +262,6 @@ function Convert-FightMugen([string]$text) {
             } elseif ($name -match 'lifebar\]$' -or $name -in "[time]", "[round]", "[winicon]") {
                 $lines[$i] = Add-ToValues $lines[$i] @(0) (-$motifCrop)
             } elseif ($name -match '(face|name)\]$' -or $name -eq "[combo]") {
-                if ($ikemen -and $name -eq "[combo]" -and $code -match '^(?i)team\d\.pos\s*=') {
-                    $lines[$i] = Add-ToValues $lines[$i] @(1) 30
-                }
                 $dx = if ($name -eq "[combo]") { 0 } else { $face }
                 if ($name -in "[simul face]", "[turns face]" -and -not $teammate) { $dx += $teamFaceShift }
                 if ($name -eq "[face]") { $dx += 3 * $frameCut[1] }
@@ -274,8 +271,8 @@ function Convert-FightMugen([string]$text) {
         }
     }
     if ($ikemen) {
-        # Combo digits are 24x37. Scale 2.4 is a step above 2 (which crushed the bitmap) and below the
-        # full 1:1 scale 3; the counter also sits 10 screen px lower. Round-win icons stay at scale 3.
+        # Combo digits are 24x37 pixel art. Only scale 3 (1:1, too big) and 1.5 (every other pixel) sample
+        # them evenly; other scales drop pixels irregularly and break the stripes. Round-win icons stay at 3.
         # ROUND and FIGHT were authored for the 1280-wide motif, so on 960 they draw a third larger.
         # FIGHT goes to 2 (was 3.5) and each ROUND n to 3.5 (was 5).
         foreach ($s in Get-StageSections $lines) {
@@ -283,7 +280,7 @@ function Convert-FightMugen([string]$text) {
             for ($i = $s.from + 1; $i -lt $s.to; $i++) {
                 $code = ($lines[$i] -replace ';.*$', '')
                 if ($sec -eq "[combo]" -and $code -match '1\.6\s*,\s*1\.6') {
-                    $lines[$i] = $lines[$i] -replace '1\.6\s*,\s*1\.6', '2.4,2.4'
+                    $lines[$i] = $lines[$i] -replace '1\.6\s*,\s*1\.6', '1.5,1.5'
                 } elseif ($sec -eq "[winicon]" -and $code -match '(?i)scale\s*=\s*2\s*,\s*2') {
                     $lines[$i] = $lines[$i] -replace '2\s*,\s*2', '3,3'
                 } elseif ($sec -eq "[winicon]" -and $code -match '(?i)counter\.scale\s*=\s*1\s*,\s*1') {
@@ -394,6 +391,10 @@ function Get-GridColumn([int]$col) {
     $gridSplit * $col - ($gridSplit - $gridGapKeep) * @($gridGaps | Where-Object { $_ -lt $col }).Count
 }
 
+$victoryW = 1280
+$victoryH = 960
+$victoryTop = 120
+$quoteScale = 1.333333
 $motifMugenX = @{
     "[title info]"      = @{ "menu.pos" = -160 }
     "[select info]"     = @{ "pos" = (Get-GridShift 0); "title.offset" = -160; "p2.face.offset" = -320; "p1.name.offset" = -160
@@ -407,7 +408,7 @@ function Convert-MotifMugen([string]$text) {
     $split = Split-Lines $text
     $lines = $split.lines
     $seps = $split.seps
-    $n = 0; $road = $false; $blocks = 0; $wide = 0
+    $n = 0; $road = $false; $blocks = 0; $wide = 0; $quoteAt = $null
     foreach ($s in Get-StageSections $lines) {
         $name = ($s.name -replace '\s+', ' ')
         if ($name -eq "[info]") {
@@ -427,12 +428,60 @@ function Convert-MotifMugen([string]$text) {
                 if ($lines[$i] -match '(?i)fadein\.col\s*=\s*255\s*,\s*255\s*,\s*255') { $lines[$i] = $lines[$i] -replace '255\s*,\s*255\s*,\s*255', '0,0,0' }
             }
         }
+        # Ikemen draws the victory screen in its own 1280x960 localcoord: the whole 1280-wide layout scaled to
+        # the 4:3 width and centred vertically. Its black clear goes to layer 1, over the stage foreground and
+        # explods; the portrait and quote go to layer 2, over the clear and the wipes, and the engine's
+        # half-black overlay is turned off.
         if ($ikemen -and $name -eq "[victorybgdef]") {
             $nlV = if ($seps[$s.from]) { $seps[$s.from] } else { "`n" }
-            # Without a clear colour the quote wipes reveal the stage behind them.
-            $lines[$s.from] += "${nlV}bgclearcolor = 0,0,0"
+            $lines[$s.from] += "${nlV}bgclearcolor = 0,0,0${nlV}bgclearlayerno = 1"
         }
-        $moves = $motifMugenX[$name]
+        # Its backgrounds ignore localcoord: they are scaled by 960/1280 instead (x is relative to the centre).
+        # The wipes that uncover the quote line by line (actions 1801-1805) grow with the quote around its
+        # offset, so each one stays on its line.
+        if ($ikemen -and $name -match '^\[victorybg\s') {
+            $st = Find-Key $lines $s "start"
+            if ($st) {
+                $v = @($st.value -split ',' | ForEach-Object { [double]::Parse($_.Trim(), $inv) })
+                $k = 960 / $victoryW
+                $q = 1
+                $act = Find-Key $lines $s "actionno"
+                if ($act -and $act.value -match '^180[1-5]$' -and $quoteAt) {
+                    $q = $quoteScale
+                    $v[0] = ($victoryW / 2 + $v[0] - $quoteAt[0]) * $q + $quoteAt[0] - $victoryW / 2
+                    $v[1] = ($v[1] - $quoteAt[1]) * $q + $quoteAt[1]
+                }
+                $lines[$st.i] = "start = $(($v[0] * $k).ToString($inv)),$(($v[1] * $k + $victoryTop * $k).ToString($inv))"
+                $nlV = if ($seps[$st.i]) { $seps[$st.i] } else { "`n" }
+                $lines[$st.i] += "${nlV}scalestart = $(($q * $k).ToString($inv)),$(($q * $k).ToString($inv))"
+            }
+        }
+        if ($ikemen -and $name -eq "[victory screen]") {
+            $wq = Find-Key $lines $s "winquote\.offset"
+            if ($wq) { $quoteAt = @((($wq.value -replace ';.*$', '') -split ',')[0..1] | ForEach-Object { [double]::Parse($_.Trim(), $inv) }) }
+            foreach ($key in "p1.offset", "winquote.offset") {
+                $k = Find-Key $lines $s ([regex]::Escape($key)); if ($k) { $lines[$k.i] = Add-ToValues $lines[$k.i] @(1) $victoryTop; $n++ }
+            }
+            foreach ($key in "p1.window", "winquote.window") {
+                $k = Find-Key $lines $s ([regex]::Escape($key)); if ($k) { $lines[$k.i] = Add-ToValues $lines[$k.i] @(1, 3) $victoryTop }
+            }
+            foreach ($key in "p1.layerno", "winquote.layerno") {
+                $k = Find-Key $lines $s ([regex]::Escape($key)); if ($k) { $lines[$k.i] = "$key = 2" }
+            }
+            # "l" is not an Ikemen wrap mode, so the quote ran past its window instead of wrapping.
+            $k = Find-Key $lines $s "winquote\.textwrap"; if ($k) { $lines[$k.i] = "winquote.textwrap = w" }
+            $nlV = if ($seps[$s.from]) { $seps[$s.from] } else { "`n" }
+            # The quote font keeps its size on the 960 motif (a third of a pixel per font pixel).
+            $lines[$s.from] += "${nlV}p1.localcoord = $victoryW,$victoryH${nlV}winquote.localcoord = $victoryW,$victoryH" +
+                "${nlV}winquote.scale = $quoteScale,$quoteScale${nlV}overlay.alpha = 0,256"
+        }
+        # Continue texts are scaled 5 on the 960 motif: 5/3 screen px per font pixel, uneven. 3 is 1:1.
+        if ($ikemen -and $name -eq "[continue screen]") {
+            for ($i = $s.from + 1; $i -lt $s.to; $i++) {
+                if ($lines[$i] -match '^(?i)\s*[\w.]*scale\s*=\s*5\s*,\s*5') { $lines[$i] = $lines[$i] -replace '5\s*,\s*5', '3,3' }
+            }
+        }
+        $moves = if ($ikemen -and $name -eq "[victory screen]") { $null } else { $motifMugenX[$name] }
         if ($moves) {
             foreach ($key in $moves.Keys) {
                 $k = Find-Key $lines $s ([regex]::Escape($key)); if ($k) { $lines[$k.i] = Add-ToValues $lines[$k.i] @(0) $moves[$key]; $n++ }
@@ -464,7 +513,7 @@ function Convert-MotifMugen([string]$text) {
                 $f = Find-Key $lines $s "$p\.face\.scale"; if ($f) { $lines[$f.i] = "$p.face.scale = $selectFaceScale" }
             }
         }
-        if ($name -eq "[victory screen]") {
+        if (-not $ikemen -and $name -eq "[victory screen]") {
             foreach ($key in "p1.window", "winquote.window") {
                 $w = Find-Key $lines $s ([regex]::Escape($key)); if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(2) (-2 * $motifCrop) }
             }
@@ -918,6 +967,110 @@ function Convert-Common([string]$text) {
         $dollScale = [regex]::Replace($text, '(?m)^(anim = f158[3-9])\r?$', ('${1}' + $eol + "scale = $hudScale,$hudScale"))
         if (([regex]::Matches($dollScale, "(?m)^anim = f158[3-9]\r?\nscale = $hudScale,$hudScale")).Count -ne 13) { throw "data/common1.cns: animacoes do juiz do 1994 EUA nao encontradas." }
         $text = $dollScale
+
+        # The 1996 Fatal Fury picture is drawn by these explods at the feet line, and sits a few pixels
+        # under the top of the screen. Lift only the picture, 5 screen px (one unit is one pixel there).
+        $script:ffLift = 0
+        $ff = [regex]::Replace($text, '(?m)^\[State [^\r\n]*\r?\n(?:(?!\[)[^\r\n]*\r?\n)*', {
+                param($m)
+                $b = $m.Value
+                if ($b -notmatch '(?m)^trigger(all|1) = StageVar\(info\.name\) = "   \("') { return $b }
+                $script:ffLift++
+                [regex]::Replace($b, '(?m)^(postype = [^\r\n]*)', ('${1}' + $eol + 'pos = 0,-5'), 1)
+            })
+        if ($script:ffLift -ne 20) { throw "data/common1.cns: arte do 1996 Fatal Fury nao encontrada ($script:ffLift)." }
+        $text = $ff
+
+        # The 2000 Egypt sky ends up to 25 lines under the top of the screen. A copy of it 30 px higher, behind
+        # everything, fills the top (the sky is an even haze there).
+        $script:egLift = 0
+        $eg = [regex]::Replace($text, '(?m)^\[State [^\r\n]*;Sky[^\r\n]*\r?\n(?:(?!\[)[^\r\n]*\r?\n)*', {
+                param($m)
+                $b = $m.Value
+                if ($b -notmatch '(?m)^trigger(all|1) = StageVar\(info\.name\) = "   A"') { return $b }
+                $script:egLift++
+                $copy = [regex]::Replace($b, '(?m)^(postype = [^\r\n]*)', ('${1}' + $eol + 'pos = 0,-30'), 1)
+                $copy = [regex]::Replace($copy, '(?m)^sprpriority = -?\d+', 'sprpriority = -9990', 1)
+                $b + ($copy -replace '^(\[State [^\]\r\n]*)\]', '${1} 4:3]')
+            })
+        if ($script:egLift -ne 5) { throw "data/common1.cns: ceu do 2000 Egypt nao encontrado ($script:egLift)." }
+        $text = $eg
+
+        # The 1998 USA sky (parallax, explod 1066) ends 16 lines under the top. Same fix, with its own ID and
+        # parallax 30 px higher.
+        $script:usLift = 0
+        $us = [regex]::Replace($text, '(?m)^\[State [^\r\n]*;Sky[^\r\n]*\r?\n(?:(?!\[)[^\r\n]*\r?\n)*', {
+                param($m)
+                $b = $m.Value
+                if ($b -notmatch '(?m)^trigger(all|1) = StageVar\(info\.name\) = "   O"') { return $b }
+                $script:usLift++
+                $copy = [regex]::Replace($b, '(?m)^id = 1066\b', 'id = 19066', 1)
+                $copy = [regex]::Replace($copy, '(?m)^sprpriority = -?\d+', 'sprpriority = -9990', 1)
+                $b + ($copy -replace '^(\[State [^\]\r\n]*)\]', '${1} 4:3]')
+            })
+        $sky = [regex]::Match($us, '\[State 0, ModifyExplod\]\r?\ntype = ModifyExplod\r?\n;;parallax explod\r?\ntrigger1 = numexplod\(1066\)\r?\n(?:(?!\[)[^\r\n]*\r?\n)*')
+        if ($script:usLift -ne 2 -or -not $sky.Success) { throw "data/common1.cns: ceu do 1998 USA nao encontrado ($script:usLift)." }
+        $skyCopy = $sky.Value -replace '\(1066\)', '(19066)' -replace 'ID = 1066', 'ID = 19066' -replace '-70', '-100' -replace '(?m)^anim = 1066\r?\n', ''
+        $text = $us.Insert($sky.Index + $sky.Length, $skyCopy)
+
+        # The stage art helper stands at the bottom of the screen on its first tick, and its explods hang from it.
+        # On Ikemen the camera is not settled on that tick (it differs between Arcade and Practice), so the picture
+        # lands up to ~80 px low. Use the bottom of the screen with the camera at rest: the floor is drawn 32 px
+        # above zoffset in a 240-line screen, one unit per pixel.
+        $anchor = 'y = floor(pos Y-screenpos Y)+gameheight+5'
+        if (([regex]::Matches($text, [regex]::Escape($anchor))).Count -ne 1) { throw "data/common1.cns: posicao do helper da arte dos cenarios nao encontrada." }
+        $text = $text.Replace($anchor, 'y = 277 - StageVar(stageinfo.zoffset)')
+        # The parallax skies measure the camera from the helper's screen height on tick 1, which was the bottom
+        # of the screen by construction; keep that value instead of the unsettled one.
+        $skyRef = [regex]::Match($text, '(trigger1 = time = 1\r?\nfv = 1\s*\r?\nvalue = )screenpos y')
+        if (-not $skyRef.Success) { throw "data/common1.cns: referencia do ceu dos cenarios nao encontrada." }
+        $text = $text.Remove($skyRef.Index, $skyRef.Length).Insert($skyRef.Index, $skyRef.Groups[1].Value + 'gameheight + 5')
+
+        # The VS names (helper 7997) hold the intro for 210 ticks from the round start, so they show under the MODE
+        # SELECT screen (helper 199999) and are half gone when it closes. Start their clock and picture after it.
+        # The button that closes MODE SELECT also skips the intro on Ikemen (VS and ROUND); not while they hold it.
+        $vs = [regex]::Match($text, '(?s)\[Statedef 7997\].*?(?=\[Statedef )')
+        $vsMenu = '!(root,numhelper(199999)) && !(enemy,numhelper(199999))'
+        $vsText = [regex]::Replace($vs.Value, '(type = Varadd\r?\n)trigger1 = 1(\r?\nv = 0\r?\nvalue = 1)', "`${1}trigger1 = $vsMenu`${2}", 1)
+        $vsText = [regex]::Replace($vsText, '(type = Explod\r?\n)trigger1 = !time(\r?\nremovetime = -1)', '${1}trigger1 = var(0) = 1${2}', 1)
+        $vsText = [regex]::Replace($vsText, '(flag = intro\r?\nflag2 = nobardisplay)(\r?\n)', '${1}${2}flag3 = roundnotskip${2}', 1)
+        if (-not $vs.Success -or ([regex]::Matches($vsText, [regex]::Escape($vsMenu) + '|trigger1 = var\(0\) = 1\r?\nremovetime|flag3 = roundnotskip')).Count -ne 3) { throw "data/common1.cns: nomes do VS nao encontrados." }
+        $text = $text.Remove($vs.Index, $vs.Length).Insert($vs.Index, $vsText)
+
+        # The stage art helper picks each round's picture with var(39) := roundno, but characters whose code writes
+        # var(39) on their helpers (Kyo, Amanda, Lee...) change it and the picture goes missing or wrong. Ask roundno.
+        $rounds = [regex]::Replace($text, '(?m)^(trigger(?:all|\d+) = )var\(39\)', '${1}roundno')
+        if (([regex]::Matches($rounds, '(?m)^trigger(?:all|\d+) = roundno')).Count -lt 500) { throw "data/common1.cns: gatilhos de round da arte dos cenarios nao encontrados." }
+        $text = $rounds
+
+        # MUGEN draws an explod behind the older ones of the same sprpriority; Ikemen draws it in front. The stage
+        # art explods are made in a row at the same priority (sky last), so on Ikemen the sky covers the stage.
+        # Break the ties in MUGEN's order: each explod goes one below the previous one of its stage and priority.
+        $script:artTies = @{}
+        $script:artRanks = @{}
+        $art = [regex]::Replace($text, '(?m)^\[State [^\r\n]*\r?\n(?:(?!\[)[^\r\n]*\r?\n)*', {
+                param($m)
+                $b = $m.Value
+                $st = [regex]::Match($b, '(?m)^trigger(?:all|1) = StageVar\(info\.name\) = "([^"]*)"')
+                $pr = [regex]::Match($b, '(?m)^sprpriority = (-?\d+)')
+                if (-not $st.Success -or -not $pr.Success -or $b -notmatch '(?mi)^type = Explod') { return $b }
+                $p = [int]$pr.Groups[1].Value
+                $key = "$($st.Groups[1].Value)|$p"
+                $k = [int]$script:artTies[$key]
+                $script:artTies[$key] = $k + 1
+                if (-not $script:artRanks.ContainsKey($st.Groups[1].Value)) { $script:artRanks[$st.Groups[1].Value] = @{} }
+                $script:artRanks[$st.Groups[1].Value][$p] = $k
+                if ($k -eq 0) { return $b }
+                $b.Remove($pr.Index, $pr.Length).Insert($pr.Index, "sprpriority = $($p - $k)")
+            })
+        foreach ($stage in $script:artRanks.Keys) {
+            $ps = @($script:artRanks[$stage].Keys | Sort-Object)
+            for ($i = 1; $i -lt $ps.Count; $i++) {
+                if ($ps[$i] - $script:artRanks[$stage][$ps[$i]] -le $ps[$i - 1]) { throw "data/common1.cns: prioridades da arte do cenario '$stage' se cruzam." }
+            }
+        }
+        if ($script:artTies.Count -lt 20) { throw "data/common1.cns: explods de arte de cenario nao encontrados." }
+        $text = $art
     }
 
     $powerY = 'fvar(39):= 197.5'
@@ -925,11 +1078,12 @@ function Convert-Common([string]$text) {
     $text = $text.Replace($powerY, "fvar(39):= 197.5 + $hudBottomShift")
 
     # The MODE SELECT backdrop only covers a 16:9 screen; a second copy underneath fills the extra 4:3 height
-    # with its lower black band (the fighters would show through there otherwise).
+    # with its lower black band (the fighters would show through there otherwise). It goes down the whole extra
+    # height, not the HUD's (10 px short of the bottom on Ikemen).
     $backdrop = [regex]::Match($text, '\[State 0, Striker Setup Top BG\]\r?\n(?:(?!\r?\n\r?\n)[\s\S])*?postype = back[^\r\n]*\r?\n')
     if (-not $backdrop.Success -or $backdrop.Value -notmatch 'anim = f199890') { throw "data/common1.cns: fundo da tela MODE SELECT nao encontrado." }
     $nl = if ($backdrop.Value.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $cover = ($backdrop.Value -replace '\]', ' 4:3]' -replace '19990', '19989' -replace 'fvar\(39\)', "fvar(39) + $hudBottomShift" -replace 'sprpriority=95', 'sprpriority=94')
+    $cover = ($backdrop.Value -replace '\]', ' 4:3]' -replace '19990', '19989' -replace 'fvar\(39\)', "fvar(39) + ($screenHeight - $screenWidth*9/16)" -replace 'sprpriority=95', 'sprpriority=94')
     $text = $text.Insert($backdrop.Index + $backdrop.Length, $nl + $cover)
     if ($counter.n -lt 10 -or $sized -lt 10) { throw "data/common1.cns: poucos elementos de HUD encontrados ($($counter.n)/$sized); arquivo diferente do esperado." }
     Write-Host "  common1.cns: $($counter.n + 1) elementos de HUD ancorados na base da tela, $sized compensados para o zoom"
@@ -1000,13 +1154,27 @@ function Get-BgY([string[]]$lines, $sections, [string]$id) {
 # Screen rows below the art on stages whose art ends closer to the floor; their floor goes down by that much.
 $floorDrop = @{
     "kofxi-boss2" = 7
-    "1999-airport" = 11; "1999-china_town" = 11; "kof2k-temple" = 11
+    "1999-airport" = 11; "1999-china_town" = 11; "kof2k-temple" = 19
     "svc_boss" = 9; "1996-boss_team" = 9
     "1995-korea_team" = 8; "2003-pyramids" = 7
     "1994-japan" = 5
     "1994-china" = 4; "1999-sewer" = 4; "1994-rugal" = 4
     "kf2k3_skynoah" = 4; "kf2k3_kagurastage" = 4; "kf2k3_cave" = 4
+    "1995-psychic_soldier" = 4; "1995-women_team" = 4; "1995-ikari_team" = 1; "kof2k1-zero" = 4
+    "1994-brazil" = 22; "1994-england" = 3; "1994-italy" = 4; "1994-korea" = 4; "1994-mexico" = 3; "1994-usa" = 4
+    "1995-fatal_fury" = 4; "1995-hero_team" = 4; "1996-women_team" = 4; "1996-ikari_team" = 1
+    "1997-bali_stage" = 3; "1997-monaco_stage" = 4; "1998-korea_dock" = 4; "1998-middle_east" = 4
+    "1999-museum" = 4; "1999-sewer_elivator" = 4; "2000-hero" = 1; "2000-harbour" = 4; "2000-korea" = 4
+    "2001-brazil" = 4; "2001-china" = 4; "2001-italy" = 4; "2001-japan" = 4; "2001-korea" = 4
+    "2001-mexico" = 4; "2001-usa" = 1; "2002-cambodia" = 4; "2003-japan" = 4; "2003-china" = 4
+    "2003-lokomotive" = 4; "kof95-saisyu" = 4; "kof96-goenitzstage" = 4; "kof97-orochichris" = 4
+    "kof97-orochishermie" = 4; "kof97-orochiyashiro" = 4; "kof97orochi" = 4; "kof99-krizalid" = 2
+    "kof2k1-igniz" = 4; "kof2k2rugal" = 4
 }
+# Screen pixels the picture (not the floor) goes up on retargeted stages; one stage unit is one pixel there.
+$artLift = @{ "1994-brazil" = 8 }
+# Screen pixels the foreground layers (layerno 1) go down, where they end above the bottom of the screen.
+$frontDrop = @{ "1998-china_lake" = 8 }
 
 function Convert-Stage([string]$text, [string]$name) {
     $split = Split-Lines $text
@@ -1066,6 +1234,9 @@ function Convert-Stage([string]$text, [string]$name) {
         if ($s.name -eq "[camera]") {
             $bl = Find-Key $lines $s "boundleft"; if ($bl) { $lines[$bl.i] = Add-ToValues $lines[$bl.i] @(0) (-$bound) }
             $br = Find-Key $lines $s "boundright"; if ($br) { $lines[$br.i] = Add-ToValues $lines[$br.i] @(0) $bound }
+            # The art is drawn for the shorter 16:9 frame; at 1:1 on 4:3 a camera going up on jumps shows the black
+            # above it, and the parallax skies (1/3 speed) part from the ground.
+            if ($retarget) { $bh = Find-Key $lines $s "boundhigh"; if ($bh) { $lines[$bh.i] = "boundhigh = 0 ;4x3 " + $lines[$bh.i].Trim() } }
             foreach ($key in "zoomout", "zoomin", "startzoom") {
                 $old = Find-Key $lines $s $key
                 if ($old) { $lines[$old.i] = ";" + $lines[$old.i] }
@@ -1085,10 +1256,33 @@ function Convert-Stage([string]$text, [string]$name) {
             }
         } elseif ($s.name -match '^\[\s*bg(?!\s*def|\s*ctrl)') {
             $zd = Find-Key $lines $s "zoomdelta"; if ($zd) { $lines[$zd.i] = ($lines[$zd.i] -replace '=\s*[-\d.]+', '= 1') }
+            # The 1995 layers are enlarged 5-20% to fill the widescreen frame. At a fractional scale the
+            # doubled pixel columns move as the camera scrolls, so draw them 1:1.
+            # Women's back wall (the 1.2 layers) is then shorter and narrower than the screen: it goes up under the
+            # front, and scrolls slower so its edges stay off screen at the camera bounds.
+            $wallLift = 0
+            if ($retarget -and $name -like "1995-*") {
+                $sc = Find-Key $lines $s "scalestart"
+                if ($sc) {
+                    $dl = Find-Key $lines $s "delta"
+                    if ($name -eq "1995-women_team" -and $sc.value -match '^1\.2\b' -and $dl -and $dl.value -match '^\.65\s*,') {
+                        $wallLift = 4
+                        $lines[$dl.i] = "delta = .55,.8 ;4x3 " + $lines[$dl.i].Trim()
+                    }
+                    # Ikari's desert (240 lines, 1.1 from the top) then ends 30 lines short of the bottom, behind
+                    # the gaps of the bridge. It goes down; the sky layer behind it stays.
+                    if ($name -eq "1995-ikari_team" -and $dl -and $dl.value -match '^\.2857\s*,') { $wallLift = -30 }
+                    $lines[$sc.i] = "scalestart = 1,1 ;4x3 " + $lines[$sc.i].Trim()
+                }
+            }
             $link = Find-Key $lines $s "positionlink"
-            $bgShift = $shift
-            # Brazil's canopy sits a few pixels under the top of the screen. Lift only the picture.
-            if ($retarget -and $name -eq "1994-brazil") { $bgShift -= 8 }
+            $bgShift = $shift - $wallLift
+            # Some 1994 pictures sit a few pixels under the top of the screen. Lift only the picture.
+            if ($retarget -and $artLift.ContainsKey($name)) { $bgShift -= $artLift[$name] }
+            if ($retarget -and $frontDrop.ContainsKey($name)) {
+                $ln = Find-Key $lines $s "layerno"
+                if ($ln -and $ln.value -match '^1\b') { $bgShift += $frontDrop[$name] }
+            }
             if (-not $bgShift -or ($link -and $link.value -match '^[-+]?0*[1-9]')) { continue }
             $st = Find-Key $lines $s "start"; if ($st) { $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $bgShift }
             foreach ($key in "window", "maskwindow") {

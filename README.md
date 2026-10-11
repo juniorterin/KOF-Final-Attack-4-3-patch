@@ -142,8 +142,19 @@ terminal (TTY), na pasta do jogo:
 fliperos-x11-run ./Ikemen_GO_Linux
 ```
 
-Para gerar a pasta no Linux, ou refazer o 4:3 numa pasta que já está lá, use o PowerShell 7 (`pwsh`).
-No Linux a cópia dos arquivos não usa `robocopy`:
+Para gerar a pasta no Linux, ou refazer o 4:3 numa pasta que já está lá, use os scripts `.sh` (os mesmos
+dos `.bat`). Eles usam o PowerShell 7 (`pwsh`); se ele não estiver instalado, uma cópia portátil (~70 MB) é
+baixada uma vez para `downloads/pwsh`, sem precisar de root. Com a pasta `Patch 4x3` dentro da pasta do jogo:
+
+```bash
+chmod +x *.sh
+./converter-ikemen.sh -Platform linux
+./aplicar-4x3.sh -Width 320 -GameDir "/caminho/KOF Final Attack Ikemen"
+./restaurar-widescreen.sh -GameDir "/caminho/KOF Final Attack Ikemen"
+```
+
+Sem `-GameDir`, `aplicar-4x3.sh` e `restaurar-widescreen.sh` usam a pasta acima de `Patch 4x3`. Com o `pwsh`
+instalado, também dá para chamar os scripts direto (no Linux a cópia dos arquivos não usa `robocopy`):
 
 ```bash
 pwsh -File kof-ikemen.ps1 -Platform linux
