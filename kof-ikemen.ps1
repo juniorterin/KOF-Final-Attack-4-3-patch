@@ -53,8 +53,9 @@ function Copy-Tree([string]$from, [string]$to) {
         $global:LASTEXITCODE = 0
         return
     }
+    # Without robocopy (Linux, macOS): -LiteralPath does not expand "*", so the items are listed and piped.
     New-Item -ItemType Directory -Force -Path $to | Out-Null
-    Copy-Item -LiteralPath (Join-Path $from "*") -Destination $to -Recurse -Force
+    Get-ChildItem -LiteralPath $from -Force | Copy-Item -Destination $to -Recurse -Force
 }
 
 $base = if ($Platform -eq "linux") { "linux" } else { "windows" }
