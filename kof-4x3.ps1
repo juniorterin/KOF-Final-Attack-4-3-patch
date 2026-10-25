@@ -1399,7 +1399,8 @@ function Invoke-Apply {
                 }
                 $board; break
             }
-            "stages\*"         { Convert-Stage $text ([IO.Path]::GetFileNameWithoutExtension($rel)); break }
+            # $rel uses "\", which is not a path separator on Linux.
+            "stages\*"         { Convert-Stage $text ([IO.Path]::GetFileNameWithoutExtension(($rel -split '\\')[-1])); break }
             "chars\*"          { Convert-CharFile $text; break }
         }
         if ($new -and $new -ne $text) { $changes[$path] = $new }
