@@ -374,7 +374,16 @@ $gridLastColumn = 33
 # per block through a window).
 $gridBlockActions = @{ 30 = 0; 31 = 0; 32 = 1; 33 = 1; 34 = 3; 35 = 3; 36 = 4; 37 = 4; 39 = 2; 40 = 1; 41 = 3 }
 $gridWideActions = @(2, 4, 7, 8)
+# Black cover over the grid during the intro (its bottom edge hides the last portrait row).
+$gridCoverActions = @(64)
+# Blue and red gradient (static, and its fade-in): the grid frame (action 8) covers its top, by as much as in 16:9
+# only if both move together.
+$gridGradientSprite = '^133\s*,\s*2\b'
+$gridGradientActions = @(133)
 $selectFaceScale = "0.8,0.8"
+# Ikemen: big portraits in the bottom corners. Their axis is the bottom-left corner of the 111-px-tall sprite (row 110),
+# drawn at 0.8 x 960/366 units per pixel (characters use localcoord 366).
+$selectFaceBottom = 720 - 0.8 * 960 / 366
 # Columns each gap between blocks keeps. Ikemen at 320x240 shows the screen edges on the CRT: there the gap columns go
 # away and each block is pushed right by a 6-unit (2 px) cell offset per gap instead, which leaves an 8-unit margin on
 # each side, and the grid moves 18 units down.
@@ -511,6 +520,8 @@ function Convert-MotifMugen([string]$text) {
                     $lines[$c.i] = Add-ToValues $lines[$c.i] @(1) ((Get-GridColumn $col) - $col)
                 }
                 $f = Find-Key $lines $s "$p\.face\.scale"; if ($f) { $lines[$f.i] = "$p.face.scale = $selectFaceScale" }
+                $o = Find-Key $lines $s "$p\.face\.offset"
+                if ($ikemen -and $o) { $lines[$o.i] = "$p.face.offset = $(if ($p -eq 'p1') { 0 } else { 960 }),$($selectFaceBottom.ToString('0.###', $inv))" }
             }
         }
         if (-not $ikemen -and $name -eq "[victory screen]") {
@@ -526,10 +537,13 @@ function Convert-MotifMugen([string]$text) {
             $road = $true
         }
         if ($name -notmatch '^\[selectbg\s' -or -not $st) { continue }
+        $spr = Find-Key $lines $s "spriteno"
+        if ($gridTop -and $spr -and $spr.value -match $gridGradientSprite) { $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $gridTop }
         $action = Find-Key $lines $s "actionno"
         if (-not $action) { continue }
         $a = [int]($action.value -replace '[^\d].*$', '')
-        if ($gridTop -and ($gridBlockActions.ContainsKey($a) -or $a -in $gridWideActions)) {
+        if ($gridTop -and ($gridBlockActions.ContainsKey($a) -or $a -in $gridWideActions -or $a -in $gridCoverActions -or
+                $a -in $gridGradientActions)) {
             $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $gridTop
         }
         if ($gridBlockActions.ContainsKey($a)) {
