@@ -1312,7 +1312,11 @@ function Convert-Stage([string]$text, [string]$name) {
                 if ($ln -and $ln.value -match '^1\b') { $bgShift += $frontDrop[$name] }
             }
             if (-not $bgShift -or ($link -and $link.value -match '^[-+]?0*[1-9]')) { continue }
-            $st = Find-Key $lines $s "start"; if ($st) { $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $bgShift }
+            # Without start the element sits at 0,0 and its BGCtrl PosSet values are offsets from there (Ikemen only:
+            # MUGEN output is unchanged).
+            $st = Find-Key $lines $s "start"
+            if ($st) { $lines[$st.i] = Add-ToValues $lines[$st.i] @(1) $bgShift }
+            elseif ($ikemen) { $nl = if ($split.seps[$s.from]) { $split.seps[$s.from] } else { "`r`n" }; $lines[$s.from] += "${nl}start = 0,$(([double]$bgShift).ToString($inv))" }
             foreach ($key in "window", "maskwindow") {
                 $w = Find-Key $lines $s $key; if ($w) { $lines[$w.i] = Add-ToValues $lines[$w.i] @(1, 3) $bgShift }
             }
