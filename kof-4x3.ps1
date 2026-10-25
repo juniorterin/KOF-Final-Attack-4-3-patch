@@ -1010,8 +1010,8 @@ function Convert-Common([string]$text) {
         if ($script:egLift -ne 5) { throw "data/common1.cns: ceu do 2000 Egypt nao encontrado ($script:egLift)." }
         $text = $eg
 
-        # The 1998 USA sky (parallax, explod 1066) ends 16 lines under the top. Same fix, with its own ID and
-        # parallax 30 px higher.
+        # The 1998 USA sky (parallax, explod 1066) ends 16 lines under the top (the station sky of round 2, F1164,
+        # 37). Same fix, with its own ID and parallax 40 px higher.
         $script:usLift = 0
         $us = [regex]::Replace($text, '(?m)^\[State [^\r\n]*;Sky[^\r\n]*\r?\n(?:(?!\[)[^\r\n]*\r?\n)*', {
                 param($m)
@@ -1024,8 +1024,22 @@ function Convert-Common([string]$text) {
             })
         $sky = [regex]::Match($us, '\[State 0, ModifyExplod\]\r?\ntype = ModifyExplod\r?\n;;parallax explod\r?\ntrigger1 = numexplod\(1066\)\r?\n(?:(?!\[)[^\r\n]*\r?\n)*')
         if ($script:usLift -ne 2 -or -not $sky.Success) { throw "data/common1.cns: ceu do 1998 USA nao encontrado ($script:usLift)." }
-        $skyCopy = $sky.Value -replace '\(1066\)', '(19066)' -replace 'ID = 1066', 'ID = 19066' -replace '-70', '-100' -replace '(?m)^anim = 1066\r?\n', ''
+        $skyCopy = $sky.Value -replace '\(1066\)', '(19066)' -replace 'ID = 1066', 'ID = 19066' -replace '-70', '-110' -replace '(?m)^anim = 1066\r?\n', ''
         $text = $us.Insert($sky.Index + $sky.Length, $skyCopy)
+
+        # Every parallax sky is explod 1066 with its own picture. MUGEN ignores anim in ModifyExplod; Ikemen applies
+        # it and shows the 1996 Fatal Fury "day" sky (F1066) in its other rounds and in the other stages.
+        # Its later skies (F1073, F1078) lack the -12 axis of F1066 and leave 8 black lines on top of a 4:3 screen.
+        # The sky moves at 1/3 of the camera speed, between screen pixels: round it to whole pixels.
+        $skyMod = [regex]'(?m)^(?:anim = 1066\r?\n)?(postype = left\r?\n)pos = \(\(0 \+ fvar\(0\)\) - fvar\(2\) / 3 \),\( \((-70|-110) \+ fvar\(1\)\) - fvar\(3\) / 3 \)'
+        if ($skyMod.Matches($text).Count -ne 2) { throw "data/common1.cns: paralaxe dos ceus nao encontrada." }
+        $px = "(screenwidth/$Width.0)"
+        $text = $skyMod.Replace($text, { param($m)
+                $y = $m.Groups[2].Value
+                if ($y -eq "-70") { $y += ' - 12*(StageVar(info.name) = "   (" && !(roundno = 1))' }
+                $m.Groups[1].Value + "pos = floor((fvar(0) - fvar(2)/3)/$px + .5)*$px," +
+                "floor(($y + fvar(1) - fvar(3)/3)/$px + .5)*$px"
+            })
 
         # The stage art helper stands at the bottom of the screen on its first tick, and its explods hang from it.
         # On Ikemen the camera is not settled on that tick (it differs between Arcade and Practice), so the picture
